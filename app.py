@@ -12,7 +12,7 @@ from urllib import request as urlrequest
 from flask import Flask, jsonify, render_template, request
 
 BASE_DIR = Path(__file__).parent
-CATALOGUE_PATH = BASE_DIR / "data" / "catalogue.csv"
+CATALOGUE_PATH = Path(os.getenv("CATALOGUE_PATH", str(BASE_DIR / "data" / "catalogue.sample.csv")))
 FIELDS_PATH = BASE_DIR / "config" / "fields.json"
 
 
@@ -167,7 +167,7 @@ def build_halo_email(action: ServiceAction, answers: dict[str, Any]) -> dict[str
 
 
 app = Flask(__name__)
-ACTIONS = load_catalogue()
+ACTIONS = load_catalogue(CATALOGUE_PATH)
 FIELD_MAP = load_fields()
 
 

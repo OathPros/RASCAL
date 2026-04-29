@@ -2,6 +2,11 @@
 
 Thin deterministic backend + simple chat UI with optional Ollama ranking.
 
+## Data privacy model (public repo safe)
+- The real service catalogue CSV should **not** be committed.
+- Provide your private CSV via local filesystem path using `CATALOGUE_PATH`.
+- The repository includes only `data/catalogue.sample.csv` with dummy/example records.
+
 ## Features
 - CSV catalogue is source of truth.
 - Deterministic local weighted ranking (works without LLM).
@@ -16,10 +21,16 @@ Thin deterministic backend + simple chat UI with optional Ollama ranking.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+export CATALOGUE_PATH=/absolute/path/to/your/private/catalogue.csv
 python app.py
 ```
 
+If `CATALOGUE_PATH` is not set, the app uses `data/catalogue.sample.csv`.
+
 Open: `http://localhost:8000`
+
+## Required catalogue columns
+`action_id,title,description,keywords,priority,owner_email`
 
 ## Test prompts
 - "I need a new laptop for engineering"
