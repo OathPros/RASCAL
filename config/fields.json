@@ -1,0 +1,19 @@
+{
+  "new_laptop": [
+    {"name": "requester_name", "title": "Requester Name", "type": "string", "required": true},
+    {"name": "department", "title": "Department", "type": "string", "required": true},
+    {"name": "justification", "title": "Business Justification", "type": "text", "required": true},
+    {"name": "needed_by", "title": "Needed By", "type": "date", "required": false}
+  ],
+  "vpn_reset": [
+    {"name": "requester_name", "title": "Requester Name", "type": "string", "required": true},
+    {"name": "username", "title": "VPN Username", "type": "string", "required": true},
+    {"name": "issue_summary", "title": "Issue Summary", "type": "text", "required": true}
+  ],
+  "software_access": [
+    {"name": "requester_name", "title": "Requester Name", "type": "string", "required": true},
+    {"name": "software_name", "title": "Software Name", "type": "string", "required": true},
+    {"name": "target_user", "title": "Target User", "type": "string", "required": true},
+    {"name": "cost_center", "title": "Cost Center", "type": "string", "required": false}
+  ]
+}
