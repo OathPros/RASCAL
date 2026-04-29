@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Service Portal</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="content">
+      <h1>Service Portal</h1>
+      <p>Welcome to the internal service catalogue portal.</p>
+    </main>
+
+    <div id="chat-widget" class="chat-widget">
+      <div class="chat-header">Service Assistant</div>
+      <div id="chat-log" class="chat-log"></div>
+      <div id="action-buttons" class="action-buttons"></div>
+      <div id="form-container"></div>
+      <div class="chat-input-row">
+        <input id="chat-input" placeholder="Describe what you need..." />
+        <button id="send-btn">Send</button>
+      </div>
+    </div>
+
+    <script src="https://unpkg.com/survey-jquery@1.9.137/survey.jquery.min.js"></script>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
