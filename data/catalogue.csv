@@ -1,0 +1,6 @@
+action_id,title,description,keywords,priority,owner_email
+new_laptop,Request New Laptop,Provision a new laptop for employees,"laptop,hardware,computer,device",9,it-ops@company.test
+vpn_reset,Reset VPN Access,Reset or unlock VPN access and credentials,"vpn,network,access,reset",8,service-desk@company.test
+software_access,Request Software Access,Grant software tool access to a user,"software,license,access,application",7,apps-admin@company.test
+email_alias,Create Email Alias,Create a distribution list or alias,"email,alias,distribution,list",5,messaging@company.test
+new_starter,New Starter Setup,Provision accounts and baseline equipment for a new joiner,"onboarding,new starter,joiner,setup",10,service-desk@company.test
