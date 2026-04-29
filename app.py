@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from unicodedata import normalize
 from urllib import request as urlrequest
 
 from flask import Flask, jsonify, render_template, request
@@ -30,21 +31,71 @@ def tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", text.lower())
 
 
+def slugify(value: str) -> str:
+    text = normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    return "_".join(tokenize(text))
+
+
+def parse_priority(value: str) -> int:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return 0
+    try:
+        return int(cleaned)
+    except ValueError:
+        return 0
+
+
+def parse_keywords(raw: str) -> list[str]:
+    if not raw:
+        return []
+    bits = re.split(r"[,;]|\bor\b", raw, flags=re.IGNORECASE)
+    return [b.strip().lower() for b in bits if b.strip()]
+
+
+def row_to_action(row: dict[str, str]) -> ServiceAction:
+    action_id = (row.get("action_id") or row.get("Process ID") or "").strip()
+    service_name = (row.get("Service Name") or row.get("title") or "").strip()
+    action_name = (row.get("Action") or "").strip()
+    action_desc = (row.get("Service Action Description") or row.get("description") or "").strip()
+    service_desc = (row.get("Entity Description (Added)") or row.get("Service Description") or "").strip()
+
+    title = service_name or action_name or "Untitled service action"
+    description = " ".join(part for part in [action_desc, service_desc] if part)
+    if not action_id:
+        action_id = slugify(" ".join(part for part in [service_name, action_name] if part))
+
+    keyword_parts = [
+        row.get("keywords") or "",
+        row.get("Entity Hamburger L1") or "",
+        row.get("Entity Hamburger L2") or "",
+        row.get("Qualified Requestors") or "",
+        row.get("Required Information (Name, Description, Restrictions)") or "",
+    ]
+
+    owner_email = (row.get("owner_email") or row.get("Send Request to") or "service-desk@company.test").strip()
+
+    return ServiceAction(
+        action_id=action_id,
+        title=title,
+        description=description,
+        keywords=parse_keywords(";".join(keyword_parts)),
+        priority=parse_priority(row.get("priority") or ""),
+        owner_email=owner_email,
+    )
+
+
 def load_catalogue(path: Path = CATALOGUE_PATH) -> list[ServiceAction]:
     actions: list[ServiceAction] = []
-    with path.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+    with path.open(newline="", encoding="utf-8-sig") as f:
+        sample = f.read(4096)
+        f.seek(0)
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t") if sample else csv.excel
+        reader = csv.DictReader(f, dialect=dialect)
         for row in reader:
-            actions.append(
-                ServiceAction(
-                    action_id=(row.get("action_id") or "").strip(),
-                    title=(row.get("title") or "").strip(),
-                    description=(row.get("description") or "").strip(),
-                    keywords=[k.strip().lower() for k in (row.get("keywords") or "").split(",") if k.strip()],
-                    priority=int((row.get("priority") or "0").strip() or 0),
-                    owner_email=(row.get("owner_email") or "service-desk@company.test").strip(),
-                )
-            )
+            action = row_to_action(row)
+            if action.action_id:
+                actions.append(action)
     return actions
 
 
