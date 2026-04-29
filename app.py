@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import difflib
 import json
 import os
 import re
@@ -119,9 +120,14 @@ def score_action(query_tokens: list[str], action: ServiceAction) -> float:
 
 def local_rank(query: str, actions: list[ServiceAction], top_n: int = 5) -> list[dict[str, Any]]:
     q_tokens = tokenize(query)
+    query_text = " ".join(q_tokens)
     scored = []
     for action in actions:
         score = score_action(q_tokens, action)
+        haystack = f"{action.title} {action.description} {' '.join(action.keywords)}".lower()
+        fuzzy = difflib.SequenceMatcher(a=query_text, b=haystack).ratio() * 10
+        phrase_bonus = 8 if query_text and query_text in haystack else 0
+        score += fuzzy + phrase_bonus
         scored.append((score, action))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [
@@ -134,6 +140,10 @@ def local_rank(query: str, actions: list[ServiceAction], top_n: int = 5) -> list
         }
         for s, a in scored[:top_n]
     ]
+
+
+def fields_for_action(action: ServiceAction) -> list[dict[str, Any]]:
+    return FIELD_MAP.get(action.action_id) or infer_generic_fields(action)
 
 
 def ollama_rerank(query: str, candidates: list[dict[str, Any]]) -> str | None:
@@ -244,11 +254,24 @@ def api_chat():
     llm_choice = ollama_rerank(query, candidates)
     selected = llm_choice or best
 
+    candidate_map = {c["action_id"]: c for c in candidates}
+    enhanced_candidates = []
+    for action_id in [c["action_id"] for c in candidates]:
+        action = next((a for a in ACTIONS if a.action_id == action_id), None)
+        if not action:
+            continue
+        fields = fields_for_action(action)
+        candidate = candidate_map[action_id] | {
+            "required_fields": [f["name"] for f in fields if f.get("required")],
+            "field_count": len(fields),
+        }
+        enhanced_candidates.append(candidate)
+
     return jsonify({
         "query": query,
         "selected_action_id": selected,
         "selection_source": "ollama" if llm_choice else "local",
-        "candidates": candidates,
+        "candidates": enhanced_candidates,
     })
 
 
@@ -258,7 +281,7 @@ def api_form(action_id: str):
     if not action:
         return jsonify({"error": "unknown action_id"}), 404
 
-    fields = FIELD_MAP.get(action_id) or infer_generic_fields(action)
+    fields = fields_for_action(action)
     schema = to_survey_schema(action, fields)
     return jsonify({"action": action.__dict__, "schema": schema})
 
@@ -273,7 +296,7 @@ def api_submit():
     if not action:
         return jsonify({"error": "unknown action_id"}), 404
 
-    fields = FIELD_MAP.get(action_id) or infer_generic_fields(action)
+    fields = fields_for_action(action)
     schema = to_survey_schema(action, fields)
     errors = validate_submission(schema, answers)
     if errors:

@@ -24,12 +24,20 @@ async function sendMessage() {
   const data = await res.json();
   buttonsEl.innerHTML = '';
   addMsg(`Best match: ${data.selected_action_id} (${data.selection_source})`);
+  const selected = data.selected_action_id;
   data.candidates.forEach(c => {
     const b = document.createElement('button');
-    b.textContent = c.title;
+    const required = (c.required_fields || []).length;
+    b.textContent = `${c.title} (${required} required fields)`;
+    if (c.action_id === selected) {
+      b.classList.add('best-match');
+    }
     b.onclick = () => loadForm(c.action_id);
     buttonsEl.appendChild(b);
   });
+  if (selected) {
+    loadForm(selected);
+  }
 }
 
 async function loadForm(actionId) {
