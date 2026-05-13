@@ -1,6 +1,15 @@
 const logEl = document.getElementById('chat-log');
 const buttonsEl = document.getElementById('action-buttons');
 const formEl = document.getElementById('form-container');
+let activeActionId = null;
+
+function setActiveActionButton(actionId) {
+  activeActionId = actionId;
+  const allButtons = buttonsEl.querySelectorAll('button[data-action-id]');
+  allButtons.forEach((button) => {
+    button.classList.toggle('is-selected', button.dataset.actionId === actionId);
+  });
+}
 
 function addMsg(text, cls='bot') {
   const div = document.createElement('div');
@@ -27,15 +36,20 @@ async function sendMessage() {
   const selected = data.selected_action_id;
   data.candidates.forEach(c => {
     const b = document.createElement('button');
+    b.dataset.actionId = c.action_id;
     const required = (c.required_fields || []).length;
     b.textContent = `${c.title} (${required} required fields)`;
     if (c.action_id === selected) {
       b.classList.add('best-match');
     }
-    b.onclick = () => loadForm(c.action_id);
+    b.onclick = () => {
+      setActiveActionButton(c.action_id);
+      loadForm(c.action_id);
+    };
     buttonsEl.appendChild(b);
   });
   if (selected) {
+    setActiveActionButton(selected);
     loadForm(selected);
   }
 }
