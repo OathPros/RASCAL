@@ -183,9 +183,29 @@ def ollama_rerank(query: str, candidates: list[dict[str, Any]]) -> str | None:
 
 def infer_generic_fields(action: ServiceAction) -> list[dict[str, Any]]:
     return [
-        {"name": "requester_name", "title": "Requester Name", "type": "string", "required": True},
-        {"name": "request_details", "title": f"Details for {action.title}", "type": "text", "required": True},
-        {"name": "urgency", "title": "Urgency", "type": "string", "required": False},
+        {"name": "requester_name", "title": "Requester Name", "type": "text", "required": True, "inputType": "text"},
+        {
+            "name": "contact_email",
+            "title": "Contact Email",
+            "type": "text",
+            "required": True,
+            "inputType": "email",
+        },
+        {
+            "name": "requested_for",
+            "title": "Is this request for you or someone else?",
+            "type": "radiogroup",
+            "required": True,
+            "choices": ["Myself", "Another user"],
+        },
+        {
+            "name": "urgency",
+            "title": "Urgency",
+            "type": "dropdown",
+            "required": True,
+            "choices": ["Low", "Medium", "High", "Critical"],
+        },
+        {"name": "request_details", "title": f"Details for {action.title}", "type": "comment", "required": True},
     ]
 
 
@@ -193,10 +213,23 @@ def to_survey_schema(action: ServiceAction, fields: list[dict[str, Any]]) -> dic
     elements = []
     required = []
     for field in fields:
-        q_type = "comment" if field["type"] == "text" else field["type"]
-        elements.append({"type": q_type, "name": field["name"], "title": field["title"]})
+        element = {
+            "type": field.get("type", "text"),
+            "name": field["name"],
+            "title": field["title"],
+        }
+
+        if field.get("choices"):
+            element["choices"] = field["choices"]
+
+        if field.get("inputType"):
+            element["inputType"] = field["inputType"]
+
         if field.get("required"):
             required.append(field["name"])
+            element["isRequired"] = True
+
+        elements.append(element)
 
     return {
         "title": action.title,
