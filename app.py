@@ -29,6 +29,33 @@ class ServiceAction:
     required_information: str
 
 
+
+def infer_field_shape(title: str, desc: str) -> dict[str, Any]:
+    lowered = f"{title} {desc}".lower()
+
+    if any(token in lowered for token in ["date", "when", "timing", "start", "end", "deadline", "needed by"]):
+        return {"type": "text", "inputType": "date"}
+
+    if any(token in lowered for token in ["email", "e-mail"]):
+        return {"type": "text", "inputType": "email"}
+
+    if any(token in lowered for token in ["phone", "telephone", "mobile", "contact number"]):
+        return {"type": "text", "inputType": "tel"}
+
+    if any(token in lowered for token in ["department", "faculty", "campus", "location", "environment", "urgency", "priority"]):
+        return {"type": "dropdown", "choices": ["Please select", "N/A"]}
+
+    if any(token in lowered for token in ["approval", "manager", "consent", "confirm", "yes/no", "yes or no"]):
+        return {"type": "radiogroup", "choices": ["Yes", "No"]}
+
+    if any(token in lowered for token in ["account", "role", "group", "permission", "profile", "access level"]):
+        return {"type": "dropdown", "choices": ["Please select", "Other"]}
+
+    if len(desc) > 70 or any(token in lowered for token in ["details", "description", "reason", "comments", "explain"]):
+        return {"type": "comment", "inputType": "text"}
+
+    return {"type": "text", "inputType": "text"}
+
 def parse_required_information(raw: str) -> list[dict[str, Any]]:
     if not raw:
         return []
@@ -42,19 +69,18 @@ def parse_required_information(raw: str) -> list[dict[str, Any]]:
         title = title.strip()
         desc = desc.strip()
         field_name = slugify(title) or f"required_info_{idx}"
+        field_shape = infer_field_shape(title, desc)
         field: dict[str, Any] = {
             "name": field_name,
             "title": title,
-            "type": "comment" if desc else "text",
+            "type": field_shape.get("type", "text"),
             "required": True,
-            "inputType": "text",
         }
 
-        lowered = f"{title} {desc}".lower()
-        if any(token in lowered for token in ["date", "needed by", "start"]):
-            field["inputType"] = "date"
-        elif "email" in lowered:
-            field["inputType"] = "email"
+        if field_shape.get("inputType"):
+            field["inputType"] = field_shape["inputType"]
+        if field_shape.get("choices"):
+            field["choices"] = field_shape["choices"]
 
         if desc:
             field["description"] = desc
@@ -97,7 +123,7 @@ def row_to_action(row: dict[str, str]) -> ServiceAction:
     action_desc = (row.get("Service Action Description") or row.get("Service Action Description (added)") or row.get("description") or "").strip()
     service_desc = (row.get("Entity Description (Added)") or row.get("Service Description") or "").strip()
 
-    title = service_name or action_name or "Untitled service action"
+    title = action_name or service_name or "Untitled service action"
     description = " ".join(part for part in [action_desc, service_desc] if part)
     if not action_id:
         action_id = slugify(" ".join(part for part in [service_name, action_name] if part))
