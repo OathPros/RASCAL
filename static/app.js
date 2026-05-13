@@ -41,8 +41,8 @@ async function sendMessage() {
   data.candidates.forEach(c => {
     const b = document.createElement('button');
     b.dataset.actionId = c.action_id;
-    const required = (c.required_fields || []).length;
-    b.textContent = `${c.title} (${required} required fields)`;
+    const actionDescription = (c.action_description_added || c.description || '').trim();
+    b.textContent = actionDescription || c.title;
     if (c.action_id === selected) {
       b.classList.add('best-match');
     }

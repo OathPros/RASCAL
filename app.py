@@ -27,6 +27,7 @@ class ServiceAction:
     priority: int
     owner_email: str
     required_information: str
+    action_description_added: str
 
 
 
@@ -120,7 +121,7 @@ def row_to_action(row: dict[str, str]) -> ServiceAction:
     action_id = (row.get("action_id") or row.get("Process ID") or "").strip()
     service_name = (row.get("Service Name") or row.get("title") or "").strip()
     action_name = (row.get("Action") or "").strip()
-    action_desc = (row.get("Service Action Description") or row.get("Service Action Description (added)") or row.get("description") or "").strip()
+    action_desc = (row.get("Service Action Description (added)") or row.get("Service Action Description") or row.get("description") or "").strip()
     service_desc = (row.get("Entity Description (Added)") or row.get("Service Description") or "").strip()
 
     title = action_name or service_name or "Untitled service action"
@@ -162,6 +163,7 @@ def row_to_action(row: dict[str, str]) -> ServiceAction:
         priority=parse_priority(row.get("priority") or ""),
         owner_email=owner_email,
         required_information=required_information,
+        action_description_added=action_desc,
     )
 
 
@@ -221,6 +223,7 @@ def local_rank(query: str, actions: list[ServiceAction], top_n: int = 5) -> list
             "description": a.description,
             "score": round(s, 3),
             "owner_email": a.owner_email,
+            "action_description_added": a.action_description_added,
         }
         for s, a in scored[:top_n]
     ]
