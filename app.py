@@ -26,6 +26,41 @@ class ServiceAction:
     keywords: list[str]
     priority: int
     owner_email: str
+    required_information: str
+
+
+def parse_required_information(raw: str) -> list[dict[str, Any]]:
+    if not raw:
+        return []
+
+    chunks = [c.strip(" -\t") for c in re.split(r"\n+|;", raw) if c.strip()]
+    fields: list[dict[str, Any]] = []
+
+    for idx, chunk in enumerate(chunks, start=1):
+        parts = [p.strip(" -\t") for p in re.split(r"\s*\|\s*", chunk) if p.strip()]
+        title = parts[0] if parts else chunk
+        desc = " | ".join(parts[1:]) if len(parts) > 1 else ""
+        field_name = slugify(title) or f"required_info_{idx}"
+        field: dict[str, Any] = {
+            "name": field_name,
+            "title": title,
+            "type": "text",
+            "required": True,
+            "inputType": "text",
+        }
+
+        lowered = title.lower()
+        if any(token in lowered for token in ["date", "needed by", "start"]):
+            field["inputType"] = "date"
+        elif "email" in lowered:
+            field["inputType"] = "email"
+
+        if desc:
+            field["title"] = f"{title} ({desc})"
+
+        fields.append(field)
+
+    return fields
 
 
 def tokenize(text: str) -> list[str]:
@@ -75,6 +110,12 @@ def row_to_action(row: dict[str, str]) -> ServiceAction:
     ]
 
     owner_email = (row.get("owner_email") or row.get("Send Request to") or "service-desk@company.test").strip()
+    required_information = (
+        row.get("Required Information (Name, Description, Restrictions)")
+        or row.get("required_information")
+        or row.get("required info")
+        or ""
+    ).strip()
 
     return ServiceAction(
         action_id=action_id,
@@ -83,6 +124,7 @@ def row_to_action(row: dict[str, str]) -> ServiceAction:
         keywords=parse_keywords(";".join(keyword_parts)),
         priority=parse_priority(row.get("priority") or ""),
         owner_email=owner_email,
+        required_information=required_information,
     )
 
 
@@ -143,7 +185,11 @@ def local_rank(query: str, actions: list[ServiceAction], top_n: int = 5) -> list
 
 
 def fields_for_action(action: ServiceAction) -> list[dict[str, Any]]:
-    return FIELD_MAP.get(action.action_id) or infer_generic_fields(action)
+    return (
+        FIELD_MAP.get(action.action_id)
+        or parse_required_information(action.required_information)
+        or infer_generic_fields(action)
+    )
 
 
 def ollama_rerank(query: str, candidates: list[dict[str, Any]]) -> str | None:
