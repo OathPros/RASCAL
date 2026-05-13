@@ -144,7 +144,12 @@ def load_catalogue(path: Path = CATALOGUE_PATH) -> list[ServiceAction]:
     with path.open(newline="", encoding="utf-8-sig") as f:
         sample = f.read(4096)
         f.seek(0)
-        dialect = csv.Sniffer().sniff(sample, delimiters=",\t") if sample else csv.excel
+        dialect = csv.excel
+        if sample:
+            try:
+                dialect = csv.Sniffer().sniff(sample, delimiters=",|\t;")
+            except csv.Error:
+                dialect = csv.excel
         reader = csv.DictReader(f, dialect=dialect)
         for row in reader:
             action = row_to_action(row)
