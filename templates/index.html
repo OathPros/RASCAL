@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,21 +7,28 @@
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
-    <main class="content">
-      <h1>Service Portal</h1>
-      <p>Welcome to the internal service catalogue portal.</p>
+    <main class="content" aria-labelledby="portal-title">
+      <p class="eyebrow">YorkU Digital Services</p>
+      <h1 id="portal-title">Service Portal</h1>
+      <p class="intro">Welcome to the internal service catalogue portal.</p>
     </main>
 
-    <div id="chat-widget" class="chat-widget">
-      <div class="chat-header">Service Assistant</div>
-      <div id="chat-log" class="chat-log"></div>
-      <div id="action-buttons" class="action-buttons"></div>
-      <div id="form-container"></div>
+    <section id="chat-widget" class="chat-widget" aria-label="Service assistant chat panel">
+      <header class="chat-header">
+        <h2>Service Assistant</h2>
+        <p>Ask for help, recommendations, or service details.</p>
+      </header>
+
+      <div id="chat-log" class="chat-log" role="log" aria-live="polite" aria-label="Chat history"></div>
+      <div id="action-buttons" class="action-buttons" aria-label="Suggested actions"></div>
+      <div id="form-container" aria-label="Service form area"></div>
+
       <div class="chat-input-row">
-        <input id="chat-input" placeholder="Describe what you need..." />
-        <button id="send-btn">Send</button>
+        <label class="sr-only" for="chat-input">Describe what you need</label>
+        <input id="chat-input" placeholder="Describe what you need..." autocomplete="off" />
+        <button id="send-btn" type="button">Send</button>
       </div>
-    </div>
+    </section>
 
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="https://unpkg.com/survey-jquery@1.9.137/survey.jquery.min.js"></script>
