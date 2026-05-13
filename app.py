@@ -14,7 +14,7 @@ from urllib import request as urlrequest
 from flask import Flask, jsonify, render_template, request
 
 BASE_DIR = Path(__file__).parent
-CATALOGUE_PATH = Path(os.getenv("CATALOGUE_PATH", str(BASE_DIR / "data" / "catalogue.sample.csv")))
+CATALOGUE_PATH = Path(os.getenv("CATALOGUE_PATH", str(BASE_DIR / "data" / "catalogue.csv")))
 FIELDS_PATH = BASE_DIR / "config" / "fields.json"
 
 
@@ -33,30 +33,31 @@ def parse_required_information(raw: str) -> list[dict[str, Any]]:
     if not raw:
         return []
 
-    chunks = [c.strip(" -\t") for c in re.split(r"\n+|;", raw) if c.strip()]
+    cleaned = raw.replace("\\n", "\n").strip().strip('"')
+    chunks = [c.strip(" -\t") for c in re.split(r"\n+|;", cleaned) if c.strip()]
     fields: list[dict[str, Any]] = []
 
     for idx, chunk in enumerate(chunks, start=1):
-        parts = [p.strip(" -\t") for p in re.split(r"\s*\|\s*", chunk) if p.strip()]
-        title = parts[0] if parts else chunk
-        desc = " | ".join(parts[1:]) if len(parts) > 1 else ""
+        title, _, desc = chunk.partition(":")
+        title = title.strip()
+        desc = desc.strip()
         field_name = slugify(title) or f"required_info_{idx}"
         field: dict[str, Any] = {
             "name": field_name,
             "title": title,
-            "type": "text",
+            "type": "comment" if desc else "text",
             "required": True,
             "inputType": "text",
         }
 
-        lowered = title.lower()
+        lowered = f"{title} {desc}".lower()
         if any(token in lowered for token in ["date", "needed by", "start"]):
             field["inputType"] = "date"
         elif "email" in lowered:
             field["inputType"] = "email"
 
         if desc:
-            field["title"] = f"{title} ({desc})"
+            field["description"] = desc
 
         fields.append(field)
 
@@ -93,7 +94,7 @@ def row_to_action(row: dict[str, str]) -> ServiceAction:
     action_id = (row.get("action_id") or row.get("Process ID") or "").strip()
     service_name = (row.get("Service Name") or row.get("title") or "").strip()
     action_name = (row.get("Action") or "").strip()
-    action_desc = (row.get("Service Action Description") or row.get("description") or "").strip()
+    action_desc = (row.get("Service Action Description") or row.get("Service Action Description (added)") or row.get("description") or "").strip()
     service_desc = (row.get("Entity Description (Added)") or row.get("Service Description") or "").strip()
 
     title = service_name or action_name or "Untitled service action"
@@ -103,13 +104,23 @@ def row_to_action(row: dict[str, str]) -> ServiceAction:
 
     keyword_parts = [
         row.get("keywords") or "",
+        row.get("Service Entity Name") or "",
+        row.get("Categorization Level 1") or "",
+        row.get("Categorization Level 2") or "",
+        row.get("Categorization Level 3") or "",
+        row.get("Categorization Level 4") or "",
         row.get("Entity Hamburger L1") or "",
         row.get("Entity Hamburger L2") or "",
         row.get("Qualified Requestors") or "",
         row.get("Required Information (Name, Description, Restrictions)") or "",
     ]
 
-    owner_email = (row.get("owner_email") or row.get("Send Request to") or "service-desk@company.test").strip()
+    owner_email = (
+        row.get("owner_email")
+        or row.get("Entity Owner Contact Email")
+        or row.get("Send Request to")
+        or "service-desk@company.test"
+    ).strip()
     required_information = (
         row.get("Required Information (Name, Description, Restrictions)")
         or row.get("required_information")
@@ -137,7 +148,7 @@ def load_catalogue(path: Path = CATALOGUE_PATH) -> list[ServiceAction]:
         reader = csv.DictReader(f, dialect=dialect)
         for row in reader:
             action = row_to_action(row)
-            if action.action_id:
+            if action.action_id and action.action_id.lower() != "process_id":
                 actions.append(action)
     return actions
 
@@ -263,6 +274,7 @@ def to_survey_schema(action: ServiceAction, fields: list[dict[str, Any]]) -> dic
             "type": field.get("type", "text"),
             "name": field["name"],
             "title": field["title"],
+            "description": field.get("description", ""),
         }
 
         if field.get("choices"):
