@@ -1,19 +1,42 @@
 {
   "new_laptop": [
-    {"name": "requester_name", "title": "Requester Name", "type": "string", "required": true},
-    {"name": "department", "title": "Department", "type": "string", "required": true},
-    {"name": "justification", "title": "Business Justification", "type": "text", "required": true},
-    {"name": "needed_by", "title": "Needed By", "type": "date", "required": false}
+    {"name": "requester_name", "title": "Requester Name", "type": "text", "required": true, "inputType": "text"},
+    {"name": "department", "title": "Department", "type": "dropdown", "required": true, "choices": ["Finance", "HR", "IT", "Operations", "Sales", "Marketing", "Legal", "Other"]},
+    {"name": "job_title", "title": "Job Title", "type": "text", "required": true, "inputType": "text"},
+    {"name": "device_profile", "title": "Device Profile", "type": "radiogroup", "required": true, "choices": ["Standard user", "Power user", "Developer", "Executive"]},
+    {"name": "needed_by", "title": "Needed By", "type": "text", "required": true, "inputType": "date"},
+    {"name": "business_justification", "title": "Business Justification", "type": "comment", "required": true}
   ],
   "vpn_reset": [
-    {"name": "requester_name", "title": "Requester Name", "type": "string", "required": true},
-    {"name": "username", "title": "VPN Username", "type": "string", "required": true},
-    {"name": "issue_summary", "title": "Issue Summary", "type": "text", "required": true}
+    {"name": "requester_name", "title": "Requester Name", "type": "text", "required": true, "inputType": "text"},
+    {"name": "username", "title": "VPN Username", "type": "text", "required": true, "inputType": "text"},
+    {"name": "contact_email", "title": "Contact Email", "type": "text", "required": true, "inputType": "email"},
+    {"name": "mfa_available", "title": "Can you complete MFA right now?", "type": "radiogroup", "required": true, "choices": ["Yes", "No"]},
+    {"name": "issue_type", "title": "Issue Type", "type": "dropdown", "required": true, "choices": ["Password reset", "Account locked", "MFA issue", "Other"]},
+    {"name": "issue_summary", "title": "Issue Summary", "type": "comment", "required": true}
   ],
   "software_access": [
-    {"name": "requester_name", "title": "Requester Name", "type": "string", "required": true},
-    {"name": "software_name", "title": "Software Name", "type": "string", "required": true},
-    {"name": "target_user", "title": "Target User", "type": "string", "required": true},
-    {"name": "cost_center", "title": "Cost Center", "type": "string", "required": false}
+    {"name": "requester_name", "title": "Requester Name", "type": "text", "required": true, "inputType": "text"},
+    {"name": "target_user", "title": "User Requiring Access", "type": "text", "required": true, "inputType": "text"},
+    {"name": "software_name", "title": "Software Name", "type": "text", "required": true, "inputType": "text"},
+    {"name": "access_level", "title": "Required Access Level", "type": "dropdown", "required": true, "choices": ["Read", "Standard", "Admin"]},
+    {"name": "cost_center", "title": "Cost Center", "type": "text", "required": true, "inputType": "text"},
+    {"name": "manager_approval", "title": "Manager Approval Received", "type": "radiogroup", "required": true, "choices": ["Yes", "No"]}
+  ],
+  "email_alias": [
+    {"name": "requester_name", "title": "Requester Name", "type": "text", "required": true, "inputType": "text"},
+    {"name": "alias_name", "title": "Desired Email Alias", "type": "text", "required": true, "inputType": "text"},
+    {"name": "target_mailbox", "title": "Destination Mailbox", "type": "text", "required": true, "inputType": "email"},
+    {"name": "alias_type", "title": "Alias Type", "type": "radiogroup", "required": true, "choices": ["Personal alias", "Shared mailbox alias", "Distribution list alias"]},
+    {"name": "justification", "title": "Reason for Alias", "type": "comment", "required": true}
+  ],
+  "new_starter": [
+    {"name": "requester_name", "title": "Requester Name", "type": "text", "required": true, "inputType": "text"},
+    {"name": "starter_full_name", "title": "New Starter Full Name", "type": "text", "required": true, "inputType": "text"},
+    {"name": "start_date", "title": "Start Date", "type": "text", "required": true, "inputType": "date"},
+    {"name": "department", "title": "Department", "type": "dropdown", "required": true, "choices": ["Finance", "HR", "IT", "Operations", "Sales", "Marketing", "Legal", "Other"]},
+    {"name": "manager_name", "title": "Manager Name", "type": "text", "required": true, "inputType": "text"},
+    {"name": "required_access", "title": "Required Systems / Access", "type": "comment", "required": true},
+    {"name": "hardware_required", "title": "Hardware Required", "type": "checkbox", "required": false, "choices": ["Laptop", "Dock", "Monitor", "Headset", "Mobile phone"]}
   ]
 }
