@@ -7,7 +7,11 @@ function setActiveActionButton(actionId) {
   activeActionId = actionId;
   const allButtons = buttonsEl.querySelectorAll('button[data-action-id]');
   allButtons.forEach((button) => {
-    button.classList.toggle('is-selected', button.dataset.actionId === actionId);
+    const isActive = button.dataset.actionId === actionId;
+    button.classList.toggle('is-selected', isActive);
+    if (!isActive) {
+      button.classList.remove('best-match');
+    }
   });
 }
 
