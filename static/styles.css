@@ -18,8 +18,9 @@ body {
   color: var(--text);
   font-family: "Inter", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background:
-    radial-gradient(circle at 90% 14%, #fce9ee 0%, rgba(252, 233, 238, 0.28) 24%, transparent 50%),
-    linear-gradient(180deg, #ffffff 0%, #f3f4f7 100%);
+    radial-gradient(circle at 12% 20%, rgba(217, 4, 41, 0.12) 0%, rgba(217, 4, 41, 0.04) 26%, transparent 52%),
+    radial-gradient(circle at 84% 16%, rgba(63, 83, 156, 0.14) 0%, rgba(63, 83, 156, 0.05) 24%, transparent 50%),
+    linear-gradient(160deg, #f8f6fa 0%, #f4f6fb 45%, #eef2f8 100%);
 }
 
 .content {
@@ -58,7 +59,7 @@ h1 {
   transform: translate(-50%, -50%);
   border-radius: 1rem;
   border: 1px solid #e2e6ef;
-  background: var(--panel);
+  background: linear-gradient(180deg, #ffffff 0%, #fbfcff 100%);
   box-shadow: 0 20px 55px rgba(24, 30, 43, 0.11);
   overflow: hidden;
   display: grid;
@@ -133,9 +134,45 @@ h1 {
   color: var(--brand-dark);
 }
 
+.action-buttons button.is-selected {
+  border-color: #f18aa0;
+  background: linear-gradient(140deg, #ffe7ee, #fff4f7);
+  color: #8f102b;
+  box-shadow: 0 0 0 1px rgba(241, 138, 160, 0.25);
+}
+
 #form-container {
   padding: 1rem 1.25rem;
   overflow-y: auto;
+  background: linear-gradient(180deg, #fcfdff 0%, #f7f9ff 100%);
+}
+
+/* SurveyJS clean-up and visual tweaks */
+#form-container .sv-title,
+#form-container .sv-description {
+  display: none;
+}
+
+#form-container .sv-dropdown-clean-button {
+  width: 1.4rem;
+  height: 1.4rem;
+  min-width: 1.4rem;
+  min-height: 1.4rem;
+  margin-left: 0.25rem;
+  border-radius: 50%;
+}
+
+#form-container .sv-dropdown-clean-button::before {
+  transform: scale(0.8);
+}
+
+#form-container .sd-input.sd-input--hasIcon {
+  padding-right: 2rem;
+}
+
+#form-container .sv-popup__arrow,
+#form-container .sv_selectbase__arrow {
+  opacity: 0.7;
 }
 
 .chat-input-row {
