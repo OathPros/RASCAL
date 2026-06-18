@@ -1,6 +1,6 @@
 # Service Catalogue Chat Prototype
 
-Thin deterministic backend + simple chat UI with optional Ollama ranking.
+Thin deterministic backend + simple chat UI with optional Cohere reranking.
 
 ## Data privacy model (public repo safe)
 - The real service catalogue CSV should **not** be committed.
@@ -10,7 +10,7 @@ Thin deterministic backend + simple chat UI with optional Ollama ranking.
 ## Features
 - CSV catalogue is source of truth.
 - Deterministic local weighted ranking (works without LLM).
-- Optional Ollama reranking in `/api/chat` with strict validation.
+- Optional Cohere Rerank second-stage reranking in `/api/chat` with local fallback.
 - Deterministic form generation:
   - explicit field map first
   - inferred generic fields fallback
@@ -43,10 +43,12 @@ Open: `http://localhost:8000`
 - `GET /api/form/<action_id>` -> survey schema + ui schema
 - `POST /api/submit` -> validate + simulate Halo email
 
-## Optional Ollama
-Set:
-- `OLLAMA_ENABLED=true`
-- `OLLAMA_MODEL=llama3.1:8b`
-- `OLLAMA_URL=http://localhost:11434/api/chat`
+## Optional Cohere Rerank
+Local deterministic ranking always runs first. When Cohere is enabled, only the top local candidates are sent to Cohere for a second-stage rerank. When Cohere is disabled, misconfigured, unavailable, or failing, the backend automatically falls back to deterministic local ranking.
 
-When unavailable/failing, backend automatically falls back to deterministic local ranking.
+Set safe defaults in `.env.example` and put real secrets only in your local `.env` file:
+- `COHERE_ENABLED=false`
+- `COHERE_API_KEY=`
+- `COHERE_MODEL=rerank-v4.0-fast`
+- `COHERE_TOP_K=25`
+- `COHERE_TIMEOUT_SECONDS=3`
