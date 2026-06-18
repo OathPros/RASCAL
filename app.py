@@ -16,6 +16,15 @@ from flask import Flask, jsonify, render_template, request
 BASE_DIR = Path(__file__).parent
 CATALOGUE_PATH = Path(os.getenv("CATALOGUE_PATH", str(BASE_DIR / "data" / "catalogue.csv")))
 FIELDS_PATH = BASE_DIR / "config" / "fields.json"
+RANKING_WEIGHTS_PATH = BASE_DIR / "config" / "ranking_weights.csv"
+
+DEFAULT_RANKING_WEIGHTS: dict[str, dict[str, float | bool]] = {
+    "title_description_overlap": {"enabled": True, "weight": 3.0, "bonus": 0.0},
+    "keyword_overlap": {"enabled": True, "weight": 5.0, "bonus": 0.0},
+    "priority": {"enabled": True, "weight": 0.4, "bonus": 0.0},
+    "fuzzy_similarity": {"enabled": True, "weight": 10.0, "bonus": 0.0},
+    "exact_phrase": {"enabled": True, "weight": 0.0, "bonus": 8.0},
+}
 
 
 @dataclass
@@ -193,28 +202,118 @@ def load_fields(path: Path = FIELDS_PATH) -> dict[str, list[dict[str, Any]]]:
         return json.load(f)
 
 
-def score_action(query_tokens: list[str], action: ServiceAction) -> float:
+def load_ranking_weights(path: Path = RANKING_WEIGHTS_PATH) -> dict[str, dict[str, float | bool]]:
+    defaults = {signal: values.copy() for signal, values in DEFAULT_RANKING_WEIGHTS.items()}
+    if not path.exists():
+        return defaults
+
+    try:
+        with path.open(newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+    except (OSError, csv.Error, UnicodeDecodeError):
+        return defaults
+
+    required_columns = {"signal", "enabled", "weight", "bonus"}
+    if not reader.fieldnames or not required_columns.issubset(reader.fieldnames):
+        return defaults
+
+    loaded: dict[str, dict[str, float | bool]] = {}
+    try:
+        for row in rows:
+            signal = (row.get("signal") or "").strip()
+            if signal not in defaults:
+                continue
+            enabled = (row.get("enabled") or "").strip().lower()
+            if enabled not in {"true", "false"}:
+                return defaults
+            loaded[signal] = {
+                "enabled": enabled == "true",
+                "weight": float(row.get("weight") or 0),
+                "bonus": float(row.get("bonus") or 0),
+            }
+    except (TypeError, ValueError):
+        return defaults
+
+    if set(loaded) != set(defaults):
+        return defaults
+    return loaded
+
+
+def ranking_signal(weights: dict[str, dict[str, float | bool]], signal: str) -> dict[str, float | bool]:
+    return weights.get(signal, DEFAULT_RANKING_WEIGHTS[signal])
+
+
+def signal_weight(weights: dict[str, dict[str, float | bool]], signal: str) -> float:
+    config = ranking_signal(weights, signal)
+    return float(config["weight"]) if config["enabled"] else 0.0
+
+
+def signal_bonus(weights: dict[str, dict[str, float | bool]], signal: str) -> float:
+    config = ranking_signal(weights, signal)
+    return float(config["bonus"]) if config["enabled"] else 0.0
+
+
+def score_action(
+    query_tokens: list[str],
+    action: ServiceAction,
+    query_text: str = "",
+    weights: dict[str, dict[str, float | bool]] | None = None,
+) -> dict[str, Any]:
+    ranking_weights = weights or load_ranking_weights()
     text_tokens = set(tokenize(action.title + " " + action.description))
     keyword_tokens = set(tokenize(" ".join(action.keywords)))
     q = set(query_tokens)
 
-    title_desc_overlap = len(q & text_tokens) * 3
-    keyword_overlap = len(q & keyword_tokens) * 5
-    priority_weight = action.priority * 0.4
-    return title_desc_overlap + keyword_overlap + priority_weight
+    matched_title_description_tokens = sorted(q & text_tokens)
+    matched_keyword_tokens = sorted(q & keyword_tokens)
+    title_description_overlap_count = len(matched_title_description_tokens)
+    keyword_overlap_count = len(matched_keyword_tokens)
+
+    title_description_score = title_description_overlap_count * signal_weight(
+        ranking_weights, "title_description_overlap"
+    )
+    keyword_score = keyword_overlap_count * signal_weight(ranking_weights, "keyword_overlap")
+    priority_score = action.priority * signal_weight(ranking_weights, "priority")
+
+    haystack = f"{action.title} {action.description} {' '.join(action.keywords)}".lower()
+    fuzzy_ratio = difflib.SequenceMatcher(a=query_text, b=haystack).ratio()
+    fuzzy_score = fuzzy_ratio * signal_weight(ranking_weights, "fuzzy_similarity")
+    exact_phrase_match = bool(query_text and query_text in haystack)
+    exact_phrase_bonus = (
+        signal_bonus(ranking_weights, "exact_phrase") if exact_phrase_match else 0.0
+    )
+
+    total_score = (
+        title_description_score + keyword_score + priority_score + fuzzy_score + exact_phrase_bonus
+    )
+    return {
+        "action_id": action.action_id,
+        "title": action.title,
+        "total_score": total_score,
+        "title_description_overlap_count": title_description_overlap_count,
+        "title_description_score": title_description_score,
+        "keyword_overlap_count": keyword_overlap_count,
+        "keyword_score": keyword_score,
+        "priority": action.priority,
+        "priority_score": priority_score,
+        "fuzzy_ratio": fuzzy_ratio,
+        "fuzzy_score": fuzzy_score,
+        "exact_phrase_match": exact_phrase_match,
+        "exact_phrase_bonus": exact_phrase_bonus,
+        "matched_title_description_tokens": matched_title_description_tokens,
+        "matched_keyword_tokens": matched_keyword_tokens,
+    }
 
 
 def local_rank(query: str, actions: list[ServiceAction], top_n: int = 5) -> list[dict[str, Any]]:
     q_tokens = tokenize(query)
     query_text = " ".join(q_tokens)
+    ranking_weights = load_ranking_weights()
     scored = []
     for action in actions:
-        score = score_action(q_tokens, action)
-        haystack = f"{action.title} {action.description} {' '.join(action.keywords)}".lower()
-        fuzzy = difflib.SequenceMatcher(a=query_text, b=haystack).ratio() * 10
-        phrase_bonus = 8 if query_text and query_text in haystack else 0
-        score += fuzzy + phrase_bonus
-        scored.append((score, action))
+        breakdown = score_action(q_tokens, action, query_text, ranking_weights)
+        scored.append((breakdown["total_score"], action, breakdown))
     scored.sort(key=lambda x: x[0], reverse=True)
     return [
         {
@@ -224,8 +323,12 @@ def local_rank(query: str, actions: list[ServiceAction], top_n: int = 5) -> list
             "score": round(s, 3),
             "owner_email": a.owner_email,
             "action_description_added": a.action_description_added,
+            "ranking_breakdown": {
+                key: round(value, 3) if isinstance(value, float) else value
+                for key, value in breakdown.items()
+            },
         }
-        for s, a in scored[:top_n]
+        for s, a, breakdown in scored[:top_n]
     ]
 
 
