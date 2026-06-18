@@ -2,6 +2,7 @@ const logEl = document.getElementById('chat-log');
 const buttonsEl = document.getElementById('action-buttons');
 const formEl = document.getElementById('form-container');
 let activeActionId = null;
+const searchContext = [];
 
 function setActiveActionButton(actionId) {
   activeActionId = actionId;
@@ -32,10 +33,17 @@ async function sendMessage() {
 
   const res = await fetch('/api/chat', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({message: text})
+    body: JSON.stringify({message: text, context: searchContext})
   });
   const data = await res.json();
+  if (!res.ok) {
+    addMsg(data.error || 'Something went wrong. Please try again.');
+    return;
+  }
+
+  searchContext.push(text);
   buttonsEl.innerHTML = '';
+  addMsg(`Top ${data.candidates.length} matches. Add more details below to refine the search.`);
   addMsg(`Best match: ${data.selected_action_id} (${data.selection_source})`);
   const selected = data.selected_action_id;
   data.candidates.forEach(c => {
@@ -91,4 +99,4 @@ document.getElementById('send-btn').onclick = sendMessage;
 document.getElementById('chat-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') sendMessage();
 });
-addMsg('Describe your request and I will suggest matching service actions.');
+addMsg('Describe your request and I will suggest the top 3 matching service actions. Add more details after the results to refine them.');

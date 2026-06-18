@@ -28,6 +28,7 @@ BASE_DIR = Path(__file__).parent
 CATALOGUE_PATH = Path(os.getenv("CATALOGUE_PATH", str(BASE_DIR / "data" / "catalogue.csv")))
 FIELDS_PATH = BASE_DIR / "config" / "fields.json"
 RANKING_WEIGHTS_PATH = BASE_DIR / "config" / "ranking_weights.csv"
+DISPLAY_CANDIDATE_LIMIT = 3
 
 DEFAULT_RANKING_WEIGHTS: dict[str, dict[str, float | bool]] = {
     "title_description_overlap": {"enabled": True, "weight": 3.0, "bonus": 0.0},
@@ -453,19 +454,34 @@ def api_chat():
     if not query:
         return jsonify({"error": "message is required"}), 400
 
+    context_messages = payload.get("context") or []
+    if not isinstance(context_messages, list):
+        context_messages = []
+    clean_context = [str(message).strip() for message in context_messages if str(message).strip()]
+    search_query = " ".join([*clean_context, query]).strip()
+
     top_k = cohere_top_k()
-    candidates = local_rank(query, ACTIONS, top_n=top_k)
+    candidates = local_rank(search_query, ACTIONS, top_n=top_k)
     local_best = candidates[0] if candidates else None
     cohere_candidates = candidates[:top_k]
     cohere_was_enabled = cohere_enabled()
-    cohere_best = cohere_rerank_action(query, cohere_candidates)
+    cohere_best = cohere_rerank_action(search_query, cohere_candidates)
     selected_candidate = cohere_best or local_best
     selected = selected_candidate["action_id"] if selected_candidate else None
     selection_source = "cohere" if cohere_best else "local" if local_best else "none"
 
+    display_action_ids = []
+    if selected:
+        display_action_ids.append(selected)
+    for candidate in candidates:
+        if candidate["action_id"] not in display_action_ids:
+            display_action_ids.append(candidate["action_id"])
+        if len(display_action_ids) >= DISPLAY_CANDIDATE_LIMIT:
+            break
+
     candidate_map = {c["action_id"]: c for c in candidates}
     enhanced_candidates = []
-    for action_id in [c["action_id"] for c in candidates]:
+    for action_id in display_action_ids:
         action = next((a for a in ACTIONS if a.action_id == action_id), None)
         if not action:
             continue
@@ -477,7 +493,9 @@ def api_chat():
         enhanced_candidates.append(candidate)
 
     return jsonify({
-        "query": query,
+        "query": search_query,
+        "latest_message": query,
+        "context": clean_context,
         "selected_action_id": selected,
         "selection_source": selection_source,
         "candidates": enhanced_candidates,
