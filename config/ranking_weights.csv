@@ -1,0 +1,6 @@
+signal,enabled,weight,bonus,notes
+title_description_overlap,true,3.0,0,Points per query token matched in title or description
+keyword_overlap,true,5.0,0,Points per query token matched in keywords
+priority,true,0.4,0,Priority multiplier
+fuzzy_similarity,true,10.0,0,SequenceMatcher ratio multiplier
+exact_phrase,true,0,8.0,Bonus if cleaned query appears exactly in action text
