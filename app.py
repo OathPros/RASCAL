@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import difflib
+import importlib
+import importlib.util
 import json
 import os
 import re
@@ -9,9 +11,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from unicodedata import normalize
-from urllib import request as urlrequest
 
 from flask import Flask, jsonify, render_template, request
+
+from cohere_reranker import cohere_enabled, cohere_rerank_action, cohere_top_k
+
+
+def load_local_dotenv() -> None:
+    if importlib.util.find_spec("dotenv"):
+        importlib.import_module("dotenv").load_dotenv()
+
+
+load_local_dotenv()
 
 BASE_DIR = Path(__file__).parent
 CATALOGUE_PATH = Path(os.getenv("CATALOGUE_PATH", str(BASE_DIR / "data" / "catalogue.csv")))
@@ -340,41 +351,6 @@ def fields_for_action(action: ServiceAction) -> list[dict[str, Any]]:
     )
 
 
-def ollama_rerank(query: str, candidates: list[dict[str, Any]]) -> str | None:
-    if os.getenv("OLLAMA_ENABLED", "false").lower() != "true":
-        return None
-    model = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
-    url = os.getenv("OLLAMA_URL", "http://localhost:11434/api/chat")
-
-    prompt = {
-        "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": (
-                    "Pick the best action_id for this request. Return JSON only: {\"action_id\":\"...\"}.\n"
-                    f"Query: {query}\nCandidates: {json.dumps(candidates)}"
-                ),
-            }
-        ],
-        "stream": False,
-    }
-
-    try:
-        req = urlrequest.Request(url, data=json.dumps(prompt).encode("utf-8"), headers={"Content-Type": "application/json"})
-        with urlrequest.urlopen(req, timeout=5) as resp:
-            raw = json.loads(resp.read().decode("utf-8"))
-        content = raw.get("message", {}).get("content", "")
-        parsed = json.loads(content)
-        candidate_ids = {c["action_id"] for c in candidates}
-        action_id = parsed.get("action_id")
-        if action_id in candidate_ids:
-            return action_id
-    except Exception:
-        return None
-    return None
-
-
 def infer_generic_fields(action: ServiceAction) -> list[dict[str, Any]]:
     return [
         {"name": "requester_name", "title": "Requester Name", "type": "text", "required": True, "inputType": "text"},
@@ -477,10 +453,15 @@ def api_chat():
     if not query:
         return jsonify({"error": "message is required"}), 400
 
-    candidates = local_rank(query, ACTIONS)
-    best = candidates[0]["action_id"] if candidates else None
-    llm_choice = ollama_rerank(query, candidates)
-    selected = llm_choice or best
+    top_k = cohere_top_k()
+    candidates = local_rank(query, ACTIONS, top_n=top_k)
+    local_best = candidates[0] if candidates else None
+    cohere_candidates = candidates[:top_k]
+    cohere_was_enabled = cohere_enabled()
+    cohere_best = cohere_rerank_action(query, cohere_candidates)
+    selected_candidate = cohere_best or local_best
+    selected = selected_candidate["action_id"] if selected_candidate else None
+    selection_source = "cohere" if cohere_best else "local" if local_best else "none"
 
     candidate_map = {c["action_id"]: c for c in candidates}
     enhanced_candidates = []
@@ -498,8 +479,17 @@ def api_chat():
     return jsonify({
         "query": query,
         "selected_action_id": selected,
-        "selection_source": "ollama" if llm_choice else "local",
+        "selection_source": selection_source,
         "candidates": enhanced_candidates,
+        "ranking_debug": {
+            "selection_source": selection_source,
+            "local_best_action_id": local_best["action_id"] if local_best else None,
+            "cohere_best_action_id": cohere_best["action_id"] if cohere_best else None,
+            "cohere_score": cohere_best.get("cohere_relevance_score") if cohere_best else None,
+            "cohere_enabled": cohere_was_enabled,
+            "cohere_top_k": top_k,
+            "fallback_used": cohere_was_enabled and local_best is not None and cohere_best is None,
+        },
     })
 
 
