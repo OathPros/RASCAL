@@ -5,9 +5,12 @@ from unittest.mock import patch
 
 import app
 from intent_refinement import (
+    _completion_url,
     _extract_completion_text,
     build_ranking_query,
+    extract_json_object,
     get_intent_refinement_config,
+    heuristic_intent_fallback,
     should_refine_intent,
     validate_intent_response,
 )
@@ -40,7 +43,26 @@ class IntentRefinementUnitTests(unittest.TestCase):
         self.assertEqual(parsed["missing_information"], [])
 
     def test_invalid_llm_json_falls_back_safely(self):
-        self.assertIsNone(validate_intent_response("Here is JSON: {}"))
+        self.assertIsNone(validate_intent_response("Here is no usable object"))
+
+    def test_json_object_is_extracted_from_wrapped_text(self):
+        parsed = validate_intent_response('Here is JSON: {"intent_classification":"non_it_or_bogus","confidence":0.8}')
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["intent_classification"], "non_it_or_bogus")
+
+    def test_json_object_is_extracted_from_fenced_text(self):
+        parsed = extract_json_object('```json\n{"intent_classification":"valid_it_service_request"}\n```')
+        self.assertEqual(parsed["intent_classification"], "valid_it_service_request")
+
+    def test_heuristic_fallback_blocks_pet_queries(self):
+        parsed = heuristic_intent_fallback("I need a puppy")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["intent_classification"], "non_it_or_bogus")
+
+    def test_heuristic_fallback_blocks_gibberish(self):
+        parsed = heuristic_intent_fallback("asdfasdfasdf")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["intent_classification"], "unsafe_or_unusable")
 
     def test_ready_to_rank_builds_improved_query(self):
         query = build_ranking_query({
@@ -68,6 +90,35 @@ class IntentRefinementUnitTests(unittest.TestCase):
         self.assertEqual(config.api_key, "institution-code")
         self.assertEqual(config.auth_header, "x-api-key")
         self.assertEqual(config.model, "claude-haiku-4-5")
+
+    @patch.dict(os.environ, {
+        "INTENT_REFINEMENT_ENABLED": "true",
+        "AZURE_FOUNDRY_ENDPOINT": "https://example.services.ai.azure.com",
+        "AZURE_FOUNDRY_API_KEY": "secret",
+        "AZURE_FOUNDRY_MODEL": "deepseek-v3",
+    }, clear=True)
+    def test_azure_foundry_aliases_use_models_chat_completions_url(self):
+        config = get_intent_refinement_config()
+        self.assertEqual(config.provider, "azure-foundry")
+        self.assertEqual(config.auth_header, "api-key")
+        self.assertEqual(
+            _completion_url(config),
+            "https://example.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview",
+        )
+
+    @patch.dict(os.environ, {
+        "INTENT_REFINEMENT_ENABLED": "true",
+        "INTENT_REFINEMENT_PROVIDER": "azure-foundry",
+        "INTENT_REFINEMENT_TARGET_URL": "https://example.services.ai.azure.com/models/chat/completions?api-version=2025-01-01-preview",
+        "INTENT_REFINEMENT_API_KEY": "secret",
+        "INTENT_REFINEMENT_MODEL": "deepseek-v3",
+    }, clear=True)
+    def test_azure_foundry_keeps_full_chat_completions_url(self):
+        config = get_intent_refinement_config()
+        self.assertEqual(
+            _completion_url(config),
+            "https://example.services.ai.azure.com/models/chat/completions?api-version=2025-01-01-preview",
+        )
 
     def test_anthropic_response_text_is_extracted(self):
         text = _extract_completion_text(

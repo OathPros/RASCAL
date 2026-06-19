@@ -56,12 +56,12 @@ Set safe defaults in `.env.example` and put real secrets only in your local `.en
 - `COHERE_TIMEOUT_SECONDS=3`
 
 ## Optional intent clarification with Claude Haiku or another LLM target
-Intent refinement is disabled by default. When enabled, `/api/chat` first performs
-local ranking, then calls the configured LLM target only when the local ranking
-looks ambiguous or the request uses vague language. The LLM never selects the
-final service action; it can only return structured intent metadata, ask one
-clarifying question, or produce a stronger query that is sent back through the
-existing local ranking and optional Cohere reranking pipeline.
+Intent refinement is disabled by default. When enabled, `/api/chat` calls the
+configured LLM target before local ranking or Cohere reranking. The LLM never
+selects the final service action; it can only return structured intent metadata,
+ask one clarifying question, block non-IT/unsafe requests, or produce a stronger
+query that is sent back through the existing local ranking and optional Cohere
+reranking pipeline.
 
 For Claude Haiku through an institutional target URL, set these values in your
 local `.env`:
@@ -72,6 +72,7 @@ local `.env`:
 - `INTENT_REFINEMENT_API_CODE=<your API code, if that is the provided secret>`
 - `INTENT_REFINEMENT_AUTH_HEADER=x-api-key`
 - `INTENT_REFINEMENT_MODEL=claude-haiku-4-5`
+- `INTENT_REFINEMENT_API_VERSION=2024-05-01-preview` (Azure Foundry only)
 - `INTENT_REFINEMENT_TIMEOUT_SECONDS=8`
 - `INTENT_REFINEMENT_MAX_TURNS=2`
 - `INTENT_REFINEMENT_MIN_CONFIDENCE=0.65`
@@ -83,12 +84,16 @@ only the one that matches what your institution provides. Set
 `x-api-key`, `api-key`, or `Authorization`; `Authorization` is sent as a bearer
 token. The code also keeps
 backward-compatible Azure Foundry aliases (`AZURE_FOUNDRY_ENDPOINT`,
-`AZURE_FOUNDRY_API_KEY`, `AZURE_FOUNDRY_MODEL`) for future provider swaps.
+`AZURE_FOUNDRY_API_KEY`, `AZURE_FOUNDRY_MODEL`, `AZURE_FOUNDRY_API_VERSION`).
+When those aliases are used, the provider is inferred as `azure-foundry` and the
+request URL is normalized to `/models/chat/completions?api-version=...` unless
+you already supplied a full chat-completions URL.
 
 If intent refinement is enabled but LLM settings are missing, timeout, return
-invalid JSON, or otherwise fail, RASCAL logs a safe warning and continues with
-the original deterministic ranking path. API keys/codes and provider headers are
-never logged.
+invalid JSON, or otherwise fail, RASCAL logs a safe warning with no API keys.
+Obvious non-IT or unusable prompts are still blocked by a deterministic guard;
+other requests continue with the original deterministic ranking path. API
+keys/codes and provider headers are never logged.
 
 Clarification state is request-scoped. If `/api/chat` returns:
 
