@@ -1,0 +1,167 @@
+import json
+import os
+import unittest
+from unittest.mock import patch
+
+import app
+from intent_refinement import (
+    _extract_completion_text,
+    build_ranking_query,
+    get_intent_refinement_config,
+    should_refine_intent,
+    validate_intent_response,
+)
+
+
+class IntentRefinementUnitTests(unittest.TestCase):
+    def test_ambiguity_detector_triggers_on_vague_text(self):
+        rankings = [{"score": 20.0}, {"score": 10.0}]
+        self.assertTrue(should_refine_intent(rankings, "I need access to the thing"))
+
+    def test_ambiguity_detector_does_not_trigger_on_clear_high_confidence(self):
+        rankings = [{"score": 20.0}, {"score": 10.0}]
+        self.assertFalse(should_refine_intent(rankings, "Reset my Passport York password"))
+
+    def test_valid_llm_json_is_accepted_and_clamped(self):
+        raw = json.dumps({
+            "status": "ready_to_rank",
+            "user_goal": "reset password",
+            "normalized_query": "reset Passport York password",
+            "likely_service_area": "accounts",
+            "request_type": "password_reset",
+            "missing_information": "not-a-list",
+            "clarifying_question": None,
+            "confidence": 2,
+            "ranking_keywords": ["passport york", "password"],
+        })
+        parsed = validate_intent_response(raw)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["confidence"], 1.0)
+        self.assertEqual(parsed["missing_information"], [])
+
+    def test_invalid_llm_json_falls_back_safely(self):
+        self.assertIsNone(validate_intent_response("Here is JSON: {}"))
+
+    def test_ready_to_rank_builds_improved_query(self):
+        query = build_ranking_query({
+            "user_goal": "request access",
+            "normalized_query": "request access to SharePoint onboarding site",
+            "likely_service_area": "SharePoint",
+            "request_type": "access_request",
+            "ranking_keywords": ["new employee setup", "permissions"],
+        })
+        self.assertIn("SharePoint", query)
+        self.assertIn("new employee setup", query)
+
+    @patch.dict(os.environ, {
+        "INTENT_REFINEMENT_ENABLED": "true",
+        "INTENT_REFINEMENT_PROVIDER": "anthropic",
+        "INTENT_REFINEMENT_TARGET_URL": "https://llm.example.test/claude-haiku",
+        "INTENT_REFINEMENT_API_CODE": "institution-code",
+        "INTENT_REFINEMENT_MODEL": "claude-haiku-4-5",
+    }, clear=True)
+    def test_config_accepts_claude_haiku_target_url_and_api_code(self):
+        config = get_intent_refinement_config()
+        self.assertTrue(config.enabled)
+        self.assertEqual(config.provider, "anthropic")
+        self.assertEqual(config.target_url, "https://llm.example.test/claude-haiku")
+        self.assertEqual(config.api_key, "institution-code")
+        self.assertEqual(config.auth_header, "x-api-key")
+        self.assertEqual(config.model, "claude-haiku-4-5")
+
+    def test_anthropic_response_text_is_extracted(self):
+        text = _extract_completion_text(
+            {"content": [{"type": "text", "text": "{\"status\":\"ready_to_rank\"}"}]},
+            "anthropic",
+        )
+        self.assertEqual(text, "{\"status\":\"ready_to_rank\"}")
+
+
+class IntentRefinementChatTests(unittest.TestCase):
+    def setUp(self):
+        app.app.config.update(TESTING=True)
+        self.client = app.app.test_client()
+
+    @patch.dict(os.environ, {"COHERE_ENABLED": "false", "INTENT_REFINEMENT_ENABLED": "false"}, clear=True)
+    def test_intent_refinement_disabled_preserves_existing_flow(self):
+        response = self.client.post("/api/chat", json={"message": "vpn access"})
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["selection_source"], "local")
+        self.assertNotIn("type", data)
+        self.assertLessEqual(len(data["candidates"]), 3)
+
+    @patch.dict(os.environ, {
+        "COHERE_ENABLED": "false",
+        "INTENT_REFINEMENT_ENABLED": "true",
+        "AZURE_FOUNDRY_ENDPOINT": "https://example.test/models",
+        "AZURE_FOUNDRY_API_KEY": "secret",
+        "AZURE_FOUNDRY_MODEL": "DeepSeek-V4-Pro",
+    }, clear=True)
+    @patch("app.refine_intent_with_llm")
+    def test_needs_clarification_returns_clarification_response(self, mock_refine):
+        mock_refine.return_value = {
+            "status": "needs_clarification",
+            "user_goal": "access onboarding thing",
+            "normalized_query": "access onboarding system",
+            "likely_service_area": None,
+            "request_type": "access_request",
+            "missing_information": ["system name"],
+            "clarifying_question": "Which onboarding tool, site, form, or system do you need access to?",
+            "confidence": 0.42,
+            "ranking_keywords": ["access", "permissions"],
+        }
+        response = self.client.post("/api/chat", json={"message": "I need access to the thing for onboarding new staff"})
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["type"], "clarification")
+        self.assertIn("Which onboarding", data["question"])
+        self.assertEqual(data["intent_state"]["turn_count"], 1)
+
+    @patch.dict(os.environ, {
+        "COHERE_ENABLED": "false",
+        "INTENT_REFINEMENT_ENABLED": "true",
+        "INTENT_REFINEMENT_DEBUG": "true",
+        "AZURE_FOUNDRY_ENDPOINT": "https://example.test/models",
+        "AZURE_FOUNDRY_API_KEY": "secret",
+        "AZURE_FOUNDRY_MODEL": "DeepSeek-V4-Pro",
+    }, clear=True)
+    @patch("app.refine_intent_with_llm")
+    def test_ready_to_rank_uses_catalogue_ranking_with_improved_query(self, mock_refine):
+        mock_refine.return_value = {
+            "status": "ready_to_rank",
+            "user_goal": "request SharePoint access",
+            "normalized_query": "request access to SharePoint site for new employee setup onboarding requests",
+            "likely_service_area": "SharePoint",
+            "request_type": "access_request",
+            "missing_information": [],
+            "clarifying_question": None,
+            "confidence": 0.9,
+            "ranking_keywords": ["new employee setup", "onboarding"],
+        }
+        response = self.client.post("/api/chat", json={"message": "The SharePoint site where managers submit new employee setup requests"})
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["type"], "ranked_results")
+        self.assertIn("SharePoint", data["ranking_query"])
+        catalogue_ids = {action.action_id for action in app.ACTIONS}
+        self.assertTrue({c["action_id"] for c in data["candidates"]}.issubset(catalogue_ids))
+
+    @patch.dict(os.environ, {
+        "COHERE_ENABLED": "false",
+        "INTENT_REFINEMENT_ENABLED": "true",
+        "AZURE_FOUNDRY_ENDPOINT": "https://example.test/models",
+        "AZURE_FOUNDRY_API_KEY": "secret",
+        "AZURE_FOUNDRY_MODEL": "DeepSeek-V4-Pro",
+    }, clear=True)
+    @patch("app.refine_intent_with_llm", return_value=None)
+    def test_llm_failure_does_not_crash_chat(self, _mock_refine):
+        response = self.client.post("/api/chat", json={"message": "I need access to the thing"})
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertIn("candidates", data)
+        self.assertEqual(data["selection_source"], "local")
+
+
+if __name__ == "__main__":
+    unittest.main()
