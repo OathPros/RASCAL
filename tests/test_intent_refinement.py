@@ -7,7 +7,9 @@ import app
 from intent_refinement import (
     _extract_completion_text,
     build_ranking_query,
+    extract_json_object,
     get_intent_refinement_config,
+    heuristic_intent_fallback,
     should_refine_intent,
     validate_intent_response,
 )
@@ -40,7 +42,26 @@ class IntentRefinementUnitTests(unittest.TestCase):
         self.assertEqual(parsed["missing_information"], [])
 
     def test_invalid_llm_json_falls_back_safely(self):
-        self.assertIsNone(validate_intent_response("Here is JSON: {}"))
+        self.assertIsNone(validate_intent_response("Here is no usable object"))
+
+    def test_json_object_is_extracted_from_wrapped_text(self):
+        parsed = validate_intent_response('Here is JSON: {"intent_classification":"non_it_or_bogus","confidence":0.8}')
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["intent_classification"], "non_it_or_bogus")
+
+    def test_json_object_is_extracted_from_fenced_text(self):
+        parsed = extract_json_object('```json\n{"intent_classification":"valid_it_service_request"}\n```')
+        self.assertEqual(parsed["intent_classification"], "valid_it_service_request")
+
+    def test_heuristic_fallback_blocks_pet_queries(self):
+        parsed = heuristic_intent_fallback("I need a puppy")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["intent_classification"], "non_it_or_bogus")
+
+    def test_heuristic_fallback_blocks_gibberish(self):
+        parsed = heuristic_intent_fallback("asdfasdfasdf")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed["intent_classification"], "unsafe_or_unusable")
 
     def test_ready_to_rank_builds_improved_query(self):
         query = build_ranking_query({

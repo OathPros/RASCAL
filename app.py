@@ -20,6 +20,7 @@ from intent_refinement import (
     build_ranking_query,
     get_intent_refinement_config,
     refine_intent_with_llm,
+    heuristic_intent_fallback,
     should_refine_intent,
 )
 
@@ -576,6 +577,10 @@ def api_chat():
             intent_config,
         )
         llm_succeeded = refined_intent is not None
+        if refined_intent is None:
+            refined_intent = heuristic_intent_fallback(search_query)
+            if refined_intent is not None:
+                no_match_reason = "llm_failed_deterministic_intent_guard"
 
         if refined_intent:
             try:

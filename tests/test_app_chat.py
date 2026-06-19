@@ -106,6 +106,26 @@ class ChatIntentGateTests(unittest.TestCase):
         self.assertFalse(data["cohere_attempted"])
         mock_cohere.assert_not_called()
 
+    def test_invalid_llm_json_puppy_uses_deterministic_guard(self):
+        with patch.dict(os.environ, {
+            "COHERE_ENABLED": "true",
+            "COHERE_API_KEY": "test-key",
+            "INTENT_REFINEMENT_ENABLED": "true",
+            "INTENT_REFINEMENT_DEBUG": "true",
+            "AZURE_FOUNDRY_ENDPOINT": "https://example.test/models",
+            "AZURE_FOUNDRY_API_KEY": "secret",
+            "AZURE_FOUNDRY_MODEL": "DeepSeek-V4-Pro",
+        }, clear=True), patch("app.refine_intent_with_llm", return_value=None), patch("app.cohere_rerank_action", return_value=None) as mock_cohere:
+            response = self.client.post("/api/chat", json={"message": "I need a puppy"})
+
+        data = response.get_json()
+        self.assertEqual(data["candidates"], [])
+        self.assertEqual(data["intent_classification"], "non_it_or_bogus")
+        self.assertEqual(data["no_match_reason"], "non_it_or_bogus")
+        self.assertFalse(data["llm_succeeded"])
+        self.assertFalse(data["cohere_attempted"])
+        mock_cohere.assert_not_called()
+
     def test_passport_york_returns_valid_service_action_candidates(self):
         response, _mock_cohere = self._post_with_intent("I can’t log into Passport York", {
             "intent_classification": "valid_it_service_request",

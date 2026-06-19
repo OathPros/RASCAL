@@ -158,13 +158,90 @@ def should_refine_intent(rankings: list[dict[str, Any]], user_text: str) -> bool
     return low_confidence or close_match or vague_language or technically_confused or symptom_without_request
 
 
+def extract_json_object(raw_response: str) -> dict[str, Any] | None:
+    text = raw_response.strip()
+    if text.startswith("```"):
+        text = text.strip("`").strip()
+        if text.lower().startswith("json"):
+            text = text[4:].strip()
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        pass
+
+    start = text.find("{")
+    if start < 0:
+        return None
+
+    in_string = False
+    escape = False
+    depth = 0
+    for index, character in enumerate(text[start:], start=start):
+        if escape:
+            escape = False
+            continue
+        if character == "\\" and in_string:
+            escape = True
+            continue
+        if character == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    parsed = json.loads(text[start : index + 1])
+                    return parsed if isinstance(parsed, dict) else None
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
+def heuristic_intent_fallback(user_message: str) -> dict[str, Any] | None:
+    tokens = [token for token in user_message.lower().replace("’", "'").split() if token.strip(" ?!.,")]
+    normalized = " ".join(token.strip(" ?!.,") for token in tokens)
+    pet_terms = {"puppy", "puppies", "dog", "dogs", "kitten", "kittens", "cat", "cats", "pet", "pets"}
+    if any(term in normalized.split() for term in pet_terms):
+        return {
+            "status": "non_it_or_bogus",
+            "intent_classification": "non_it_or_bogus",
+            "user_goal": normalized,
+            "normalized_query": "",
+            "likely_service_area": None,
+            "request_type": None,
+            "missing_information": [],
+            "clarifying_question": None,
+            "confidence": 0.9,
+            "ranking_keywords": [],
+        }
+    compact = normalized.replace(" ", "")
+    if len(compact) >= 8 and len(set(compact)) <= 6 and not any(ch.isdigit() for ch in compact):
+        return {
+            "status": "unsafe_or_unusable",
+            "intent_classification": "unsafe_or_unusable",
+            "user_goal": "",
+            "normalized_query": "",
+            "likely_service_area": None,
+            "request_type": None,
+            "missing_information": [],
+            "clarifying_question": None,
+            "confidence": 0.75,
+            "ranking_keywords": [],
+        }
+    return None
+
+
 def validate_intent_response(raw_response: str | dict[str, Any] | None) -> dict[str, Any] | None:
     if raw_response is None:
         return None
-    try:
-        parsed = json.loads(raw_response) if isinstance(raw_response, str) else raw_response
-    except json.JSONDecodeError:
-        LOGGER.warning("Intent refinement returned invalid JSON; falling back to local ranking")
+    parsed = extract_json_object(raw_response) if isinstance(raw_response, str) else raw_response
+    if parsed is None:
+        LOGGER.warning("Intent refinement returned invalid JSON; falling back to deterministic intent guard")
         return None
 
     if not isinstance(parsed, dict):
