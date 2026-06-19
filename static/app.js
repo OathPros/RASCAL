@@ -3,6 +3,7 @@ const buttonsEl = document.getElementById('action-buttons');
 const formEl = document.getElementById('form-container');
 let activeActionId = null;
 const searchContext = [];
+let intentState = null;
 
 function setActiveActionButton(actionId) {
   activeActionId = actionId;
@@ -24,6 +25,12 @@ function addMsg(text, cls='bot') {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+function clearResults() {
+  buttonsEl.innerHTML = '';
+  formEl.innerHTML = '';
+  activeActionId = null;
+}
+
 async function sendMessage() {
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
@@ -33,7 +40,7 @@ async function sendMessage() {
 
   const res = await fetch('/api/chat', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({message: text, context: searchContext})
+    body: JSON.stringify({message: text, context: searchContext, intent_state: intentState})
   });
   const data = await res.json();
   if (!res.ok) {
@@ -42,6 +49,22 @@ async function sendMessage() {
   }
 
   searchContext.push(text);
+
+  if (data.type === 'clarification') {
+    intentState = data.intent_state || null;
+    clearResults();
+    addMsg(data.question || 'Can you add one more detail so I can route this correctly?');
+    return;
+  }
+
+  if (data.type === 'out_of_scope' || data.type === 'unsupported') {
+    intentState = null;
+    clearResults();
+    addMsg(data.message || 'I can only help route YorkU service catalogue requests.');
+    return;
+  }
+
+  intentState = null;
   buttonsEl.innerHTML = '';
   addMsg(`Top ${data.candidates.length} matches. Add more details below to refine the search.`);
   addMsg(`Best match: ${data.selected_action_id} (${data.selection_source})`);

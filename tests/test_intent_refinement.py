@@ -147,6 +147,35 @@ class IntentRefinementChatTests(unittest.TestCase):
         catalogue_ids = {action.action_id for action in app.ACTIONS}
         self.assertTrue({c["action_id"] for c in data["candidates"]}.issubset(catalogue_ids))
 
+
+    @patch.dict(os.environ, {
+        "COHERE_ENABLED": "false",
+        "INTENT_REFINEMENT_ENABLED": "true",
+        "AZURE_FOUNDRY_ENDPOINT": "https://example.test/models",
+        "AZURE_FOUNDRY_API_KEY": "secret",
+        "AZURE_FOUNDRY_MODEL": "DeepSeek-V4-Pro",
+    }, clear=True)
+    @patch("app.refine_intent_with_llm")
+    def test_out_of_scope_intent_does_not_return_catalogue_matches(self, mock_refine):
+        mock_refine.return_value = {
+            "status": "out_of_scope",
+            "user_goal": "get a puppy",
+            "normalized_query": "",
+            "likely_service_area": None,
+            "request_type": None,
+            "missing_information": [],
+            "clarifying_question": None,
+            "confidence": 0.95,
+            "ranking_keywords": [],
+        }
+        response = self.client.post("/api/chat", json={"message": "I need a puppy"})
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertEqual(data["type"], "out_of_scope")
+        self.assertEqual(data["candidates"], [])
+        self.assertIsNone(data["selected_action_id"])
+        self.assertEqual(data["selection_source"], "intent_refinement")
+
     @patch.dict(os.environ, {
         "COHERE_ENABLED": "false",
         "INTENT_REFINEMENT_ENABLED": "true",
