@@ -5,6 +5,7 @@ import difflib
 import importlib
 import importlib.util
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -15,6 +16,12 @@ from unicodedata import normalize
 from flask import Flask, jsonify, render_template, request
 
 from cohere_reranker import cohere_enabled, cohere_rerank_action, cohere_top_k
+from intent_refinement import (
+    build_ranking_query,
+    get_intent_refinement_config,
+    refine_intent_with_llm,
+    should_refine_intent,
+)
 
 
 def load_local_dotenv() -> None:
@@ -29,6 +36,7 @@ CATALOGUE_PATH = Path(os.getenv("CATALOGUE_PATH", str(BASE_DIR / "data" / "catal
 FIELDS_PATH = BASE_DIR / "config" / "fields.json"
 RANKING_WEIGHTS_PATH = BASE_DIR / "config" / "ranking_weights.csv"
 DISPLAY_CANDIDATE_LIMIT = 3
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_RANKING_WEIGHTS: dict[str, dict[str, float | bool]] = {
     "title_description_overlap": {"enabled": True, "weight": 3.0, "bonus": 0.0},
@@ -344,6 +352,67 @@ def local_rank(query: str, actions: list[ServiceAction], top_n: int = 5) -> list
     ]
 
 
+def catalogue_service_areas(actions: list[ServiceAction]) -> list[str]:
+    areas: set[str] = set()
+    for action in actions:
+        for keyword in action.keywords:
+            cleaned = str(keyword).strip()
+            if 2 <= len(cleaned) <= 80:
+                areas.add(cleaned)
+    return sorted(areas)[:50]
+
+
+def select_ranked_candidates(search_query: str) -> dict[str, Any]:
+    top_k = cohere_top_k()
+    candidates = local_rank(search_query, ACTIONS, top_n=top_k)
+    local_best = candidates[0] if candidates else None
+    cohere_candidates = candidates[:top_k]
+    cohere_was_enabled = cohere_enabled()
+    cohere_best = cohere_rerank_action(search_query, cohere_candidates)
+    selected_candidate = cohere_best or local_best
+    selected = selected_candidate["action_id"] if selected_candidate else None
+    selection_source = "cohere" if cohere_best else "local" if local_best else "none"
+
+    display_action_ids = []
+    if selected:
+        display_action_ids.append(selected)
+    for candidate in candidates:
+        if candidate["action_id"] not in display_action_ids:
+            display_action_ids.append(candidate["action_id"])
+        if len(display_action_ids) >= DISPLAY_CANDIDATE_LIMIT:
+            break
+
+    candidate_map = {c["action_id"]: c for c in candidates}
+    enhanced_candidates = []
+    for action_id in display_action_ids:
+        action = next((a for a in ACTIONS if a.action_id == action_id), None)
+        if not action:
+            continue
+        fields = fields_for_action(action)
+        candidate = candidate_map[action_id] | {
+            "required_fields": [f["name"] for f in fields if f.get("required")],
+            "field_count": len(fields),
+        }
+        enhanced_candidates.append(candidate)
+
+    return {
+        "query": search_query,
+        "selected_action_id": selected,
+        "selection_source": selection_source,
+        "candidates": enhanced_candidates,
+        "ranking_debug": {
+            "selection_source": selection_source,
+            "local_best_action_id": local_best["action_id"] if local_best else None,
+            "cohere_best_action_id": cohere_best["action_id"] if cohere_best else None,
+            "cohere_score": cohere_best.get("cohere_relevance_score") if cohere_best else None,
+            "cohere_enabled": cohere_was_enabled,
+            "cohere_top_k": top_k,
+            "fallback_used": cohere_was_enabled and local_best is not None and cohere_best is None,
+        },
+        "all_candidates": candidates,
+    }
+
+
 def fields_for_action(action: ServiceAction) -> list[dict[str, Any]]:
     return (
         FIELD_MAP.get(action.action_id)
@@ -460,55 +529,89 @@ def api_chat():
     clean_context = [str(message).strip() for message in context_messages if str(message).strip()]
     search_query = " ".join([*clean_context, query]).strip()
 
-    top_k = cohere_top_k()
-    candidates = local_rank(search_query, ACTIONS, top_n=top_k)
-    local_best = candidates[0] if candidates else None
-    cohere_candidates = candidates[:top_k]
-    cohere_was_enabled = cohere_enabled()
-    cohere_best = cohere_rerank_action(search_query, cohere_candidates)
-    selected_candidate = cohere_best or local_best
-    selected = selected_candidate["action_id"] if selected_candidate else None
-    selection_source = "cohere" if cohere_best else "local" if local_best else "none"
+    ranking_query = search_query
+    initial_candidates = local_rank(search_query, ACTIONS, top_n=cohere_top_k())
+    intent_config = get_intent_refinement_config()
+    refined_intent = None
+    intent_used = False
 
-    display_action_ids = []
-    if selected:
-        display_action_ids.append(selected)
-    for candidate in candidates:
-        if candidate["action_id"] not in display_action_ids:
-            display_action_ids.append(candidate["action_id"])
-        if len(display_action_ids) >= DISPLAY_CANDIDATE_LIMIT:
-            break
+    # Clarification state is request-scoped and client-provided. A frontend can pass
+    # the previous clarification response's intent_state back in this field.
+    previous_intent_state = payload.get("intent_state")
+    if not isinstance(previous_intent_state, dict):
+        previous_intent_state = None
 
-    candidate_map = {c["action_id"]: c for c in candidates}
-    enhanced_candidates = []
-    for action_id in display_action_ids:
-        action = next((a for a in ACTIONS if a.action_id == action_id), None)
-        if not action:
-            continue
-        fields = fields_for_action(action)
-        candidate = candidate_map[action_id] | {
-            "required_fields": [f["name"] for f in fields if f.get("required")],
-            "field_count": len(fields),
-        }
-        enhanced_candidates.append(candidate)
+    if intent_config.enabled and should_refine_intent(initial_candidates, search_query):
+        refined_intent = refine_intent_with_llm(
+            search_query,
+            initial_candidates[:5],
+            catalogue_service_areas(ACTIONS),
+            previous_intent_state,
+            intent_config,
+        )
+        if refined_intent:
+            intent_used = True
+            try:
+                turn_count = int(previous_intent_state.get("turn_count", 0)) if previous_intent_state else 0
+            except (TypeError, ValueError):
+                turn_count = 0
+            refined_intent["turn_count"] = turn_count + 1
 
-    return jsonify({
+            if (
+                refined_intent["status"] == "needs_clarification"
+                and refined_intent.get("clarifying_question")
+                and refined_intent["turn_count"] <= intent_config.max_turns
+            ):
+                return jsonify({
+                    "type": "clarification",
+                    "question": refined_intent["clarifying_question"],
+                    "intent_state": refined_intent,
+                })
+
+            if refined_intent["status"] == "ready_to_rank" or refined_intent["turn_count"] > intent_config.max_turns:
+                improved_query = build_ranking_query(refined_intent)
+                if improved_query and (
+                    refined_intent["confidence"] >= intent_config.min_confidence
+                    or refined_intent.get("clarifying_question")
+                    or refined_intent["turn_count"] > intent_config.max_turns
+                ):
+                    ranking_query = improved_query
+                elif not improved_query:
+                    LOGGER.warning("Intent refinement produced an empty ranking query; falling back to original ranking")
+                else:
+                    LOGGER.warning("Intent refinement confidence was below threshold without clarification; falling back to original ranking")
+            elif refined_intent["status"] in {"out_of_scope", "unsupported"}:
+                LOGGER.warning("Intent refinement returned %s; falling back to original ranking", refined_intent["status"])
+
+    ranked = select_ranked_candidates(ranking_query)
+
+    response = {
         "query": search_query,
         "latest_message": query,
         "context": clean_context,
-        "selected_action_id": selected,
-        "selection_source": selection_source,
-        "candidates": enhanced_candidates,
-        "ranking_debug": {
-            "selection_source": selection_source,
-            "local_best_action_id": local_best["action_id"] if local_best else None,
-            "cohere_best_action_id": cohere_best["action_id"] if cohere_best else None,
-            "cohere_score": cohere_best.get("cohere_relevance_score") if cohere_best else None,
-            "cohere_enabled": cohere_was_enabled,
-            "cohere_top_k": top_k,
-            "fallback_used": cohere_was_enabled and local_best is not None and cohere_best is None,
-        },
-    })
+        "selected_action_id": ranked["selected_action_id"],
+        "selection_source": ranked["selection_source"],
+        "candidates": ranked["candidates"],
+        "ranking_debug": ranked["ranking_debug"],
+    }
+    if intent_config.debug:
+        response.update({
+            "type": "ranked_results",
+            "original_query": search_query,
+            "ranking_query": ranking_query,
+            "intent_refinement": {
+                "used": intent_used,
+                "status": refined_intent.get("status") if refined_intent else None,
+                "confidence": refined_intent.get("confidence") if refined_intent else None,
+                "user_goal": refined_intent.get("user_goal") if refined_intent else None,
+                "normalized_query": refined_intent.get("normalized_query") if refined_intent else None,
+                "ranking_keywords": refined_intent.get("ranking_keywords") if refined_intent else [],
+            },
+            "initial_candidates": initial_candidates,
+            "final_candidates": ranked["all_candidates"],
+        })
+
+    return jsonify(response)
 
 
 @app.get("/api/form/<action_id>")
