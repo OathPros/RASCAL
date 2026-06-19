@@ -581,7 +581,18 @@ def api_chat():
                 else:
                     LOGGER.warning("Intent refinement confidence was below threshold without clarification; falling back to original ranking")
             elif refined_intent["status"] in {"out_of_scope", "unsupported"}:
-                LOGGER.warning("Intent refinement returned %s; falling back to original ranking", refined_intent["status"])
+                return jsonify({
+                    "type": refined_intent["status"],
+                    "message": refined_intent.get("clarifying_question")
+                    or "I can only help route YorkU service catalogue requests. Please ask about a YorkU service, request, or support pathway.",
+                    "intent_state": refined_intent,
+                    "query": search_query,
+                    "latest_message": query,
+                    "context": clean_context,
+                    "candidates": [],
+                    "selected_action_id": None,
+                    "selection_source": "intent_refinement",
+                })
 
     ranked = select_ranked_candidates(ranking_query)
 
