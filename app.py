@@ -36,6 +36,13 @@ CATALOGUE_PATH = Path(os.getenv("CATALOGUE_PATH", str(BASE_DIR / "data" / "catal
 FIELDS_PATH = BASE_DIR / "config" / "fields.json"
 RANKING_WEIGHTS_PATH = BASE_DIR / "config" / "ranking_weights.csv"
 DISPLAY_CANDIDATE_LIMIT = 3
+MIN_RANKING_SCORE = float(os.getenv("MIN_RANKING_SCORE", "2.0"))
+NO_MATCH_MESSAGE = "I could not match that to a York IT service request. Try describing the technology, account, access, software, device, or service you need help with."
+STOPWORDS = {
+    "a", "an", "the", "need", "needs", "needed", "help", "thing", "stuff", "please",
+    "i", "me", "my", "we", "our", "you", "your", "to", "for", "with", "about", "what",
+    "that", "this", "it", "is", "are", "can", "could", "would", "should", "get", "want",
+}
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_RANKING_WEIGHTS: dict[str, dict[str, float | bool]] = {
@@ -121,7 +128,7 @@ def parse_required_information(raw: str) -> list[dict[str, Any]]:
 
 
 def tokenize(text: str) -> list[str]:
-    return re.findall(r"[a-z0-9]+", text.lower())
+    return [token for token in re.findall(r"[a-z0-9]+", text.lower()) if token not in STOPWORDS]
 
 
 def slugify(value: str) -> str:
@@ -326,7 +333,7 @@ def score_action(
     }
 
 
-def local_rank(query: str, actions: list[ServiceAction], top_n: int = 5) -> list[dict[str, Any]]:
+def local_rank(query: str, actions: list[ServiceAction], top_n: int = 5, min_score: float = 0.0) -> list[dict[str, Any]]:
     q_tokens = tokenize(query)
     query_text = " ".join(q_tokens)
     ranking_weights = load_ranking_weights()
@@ -335,6 +342,8 @@ def local_rank(query: str, actions: list[ServiceAction], top_n: int = 5) -> list
         breakdown = score_action(q_tokens, action, query_text, ranking_weights)
         scored.append((breakdown["total_score"], action, breakdown))
     scored.sort(key=lambda x: x[0], reverse=True)
+    if min_score > 0:
+        scored = [item for item in scored if item[0] >= min_score]
     return [
         {
             "action_id": a.action_id,
@@ -364,10 +373,11 @@ def catalogue_service_areas(actions: list[ServiceAction]) -> list[str]:
 
 def select_ranked_candidates(search_query: str) -> dict[str, Any]:
     top_k = cohere_top_k()
-    candidates = local_rank(search_query, ACTIONS, top_n=top_k)
+    candidates = local_rank(search_query, ACTIONS, top_n=top_k, min_score=MIN_RANKING_SCORE)
     local_best = candidates[0] if candidates else None
     cohere_candidates = candidates[:top_k]
     cohere_was_enabled = cohere_enabled()
+    cohere_attempted = cohere_was_enabled and bool(cohere_candidates)
     cohere_best = cohere_rerank_action(search_query, cohere_candidates)
     selected_candidate = cohere_best or local_best
     selected = selected_candidate["action_id"] if selected_candidate else None
@@ -406,8 +416,10 @@ def select_ranked_candidates(search_query: str) -> dict[str, Any]:
             "cohere_best_action_id": cohere_best["action_id"] if cohere_best else None,
             "cohere_score": cohere_best.get("cohere_relevance_score") if cohere_best else None,
             "cohere_enabled": cohere_was_enabled,
+            "cohere_attempted": cohere_attempted,
             "cohere_top_k": top_k,
-            "fallback_used": cohere_was_enabled and local_best is not None and cohere_best is None,
+            "fallback_used": cohere_attempted and local_best is not None and cohere_best is None,
+            "min_ranking_score": MIN_RANKING_SCORE,
         },
         "all_candidates": candidates,
     }
@@ -528,63 +540,63 @@ def api_chat():
         context_messages = []
     clean_context = [str(message).strip() for message in context_messages if str(message).strip()]
     search_query = " ".join([*clean_context, query]).strip()
-
     ranking_query = search_query
-    initial_candidates = local_rank(search_query, ACTIONS, top_n=cohere_top_k())
+
     intent_config = get_intent_refinement_config()
     refined_intent = None
-    intent_used = False
-
-    # Clarification state is request-scoped and client-provided. A frontend can pass
-    # the previous clarification response's intent_state back in this field.
+    intent_attempted = False
+    llm_succeeded = False
+    no_match_reason = None
     previous_intent_state = payload.get("intent_state")
     if not isinstance(previous_intent_state, dict):
         previous_intent_state = None
 
-    if intent_config.enabled and should_refine_intent(initial_candidates, search_query):
+    def debug_fields(ranking_source: str = "none", cohere_attempted: bool = False, fallback_used: bool = False) -> dict[str, Any]:
+        return {
+            "intent_refinement_enabled": intent_config.enabled,
+            "intent_refinement_attempted": intent_attempted,
+            "llm_succeeded": llm_succeeded,
+            "original_query": search_query,
+            "refined_query": ranking_query,
+            "intent_classification": refined_intent.get("intent_classification") if refined_intent else None,
+            "refinement_confidence": refined_intent.get("confidence") if refined_intent else None,
+            "no_match_reason": no_match_reason,
+            "fallback_used": fallback_used,
+            "ranking_source": ranking_source,
+            "cohere_attempted": cohere_attempted,
+        }
+
+    if intent_config.enabled:
+        intent_attempted = True
         refined_intent = refine_intent_with_llm(
             search_query,
-            initial_candidates[:5],
+            [],
             catalogue_service_areas(ACTIONS),
             previous_intent_state,
             intent_config,
         )
+        llm_succeeded = refined_intent is not None
+
         if refined_intent:
-            intent_used = True
             try:
                 turn_count = int(previous_intent_state.get("turn_count", 0)) if previous_intent_state else 0
             except (TypeError, ValueError):
                 turn_count = 0
             refined_intent["turn_count"] = turn_count + 1
+            classification = refined_intent.get("intent_classification") or refined_intent.get("status")
+            classification = {
+                "ready_to_rank": "valid_it_service_request",
+                "needs_clarification": "vague_but_probably_it",
+                "out_of_scope": "non_it_or_bogus",
+                "unsupported": "unsafe_or_unusable",
+            }.get(classification, classification)
+            refined_intent["intent_classification"] = classification
 
-            if (
-                refined_intent["status"] == "needs_clarification"
-                and refined_intent.get("clarifying_question")
-                and refined_intent["turn_count"] <= intent_config.max_turns
-            ):
-                return jsonify({
-                    "type": "clarification",
-                    "question": refined_intent["clarifying_question"],
-                    "intent_state": refined_intent,
-                })
-
-            if refined_intent["status"] == "ready_to_rank" or refined_intent["turn_count"] > intent_config.max_turns:
-                improved_query = build_ranking_query(refined_intent)
-                if improved_query and (
-                    refined_intent["confidence"] >= intent_config.min_confidence
-                    or refined_intent.get("clarifying_question")
-                    or refined_intent["turn_count"] > intent_config.max_turns
-                ):
-                    ranking_query = improved_query
-                elif not improved_query:
-                    LOGGER.warning("Intent refinement produced an empty ranking query; falling back to original ranking")
-                else:
-                    LOGGER.warning("Intent refinement confidence was below threshold without clarification; falling back to original ranking")
-            elif refined_intent["status"] in {"out_of_scope", "unsupported"}:
-                return jsonify({
-                    "type": refined_intent["status"],
-                    "message": refined_intent.get("clarifying_question")
-                    or "I can only help route YorkU service catalogue requests. Please ask about a YorkU service, request, or support pathway.",
+            if classification in {"non_it_or_bogus", "unsafe_or_unusable"}:
+                no_match_reason = classification
+                response = {
+                    "type": refined_intent.get("status") if refined_intent.get("status") in {"out_of_scope", "unsupported"} else "no_match",
+                    "message": NO_MATCH_MESSAGE,
                     "intent_state": refined_intent,
                     "query": search_query,
                     "latest_message": query,
@@ -592,9 +604,47 @@ def api_chat():
                     "candidates": [],
                     "selected_action_id": None,
                     "selection_source": "intent_refinement",
-                })
+                    "ranking_debug": {"selection_source": "none", "cohere_attempted": False, "fallback_used": False},
+                }
+                if intent_config.debug:
+                    response.update(debug_fields())
+                return jsonify(response)
+
+            if (
+                classification == "vague_but_probably_it"
+                and refined_intent.get("clarifying_question")
+                and refined_intent["turn_count"] <= intent_config.max_turns
+            ):
+                response = {
+                    "type": "clarification",
+                    "question": refined_intent["clarifying_question"],
+                    "message": refined_intent["clarifying_question"],
+                    "intent_state": refined_intent,
+                    "query": search_query,
+                    "latest_message": query,
+                    "context": clean_context,
+                    "candidates": [],
+                    "selected_action_id": None,
+                    "selection_source": "intent_refinement",
+                }
+                if intent_config.debug:
+                    response.update(debug_fields())
+                return jsonify(response)
+
+            if classification in {"valid_it_service_request", "vague_but_probably_it"}:
+                improved_query = build_ranking_query(refined_intent)
+                if improved_query and refined_intent.get("confidence", 0) >= intent_config.min_confidence:
+                    ranking_query = improved_query
+                elif improved_query and classification == "vague_but_probably_it":
+                    ranking_query = improved_query
+                elif not improved_query:
+                    LOGGER.warning("Intent refinement produced an empty ranking query; falling back to original ranking")
+                else:
+                    LOGGER.warning("Intent refinement confidence was below threshold; falling back to original ranking")
 
     ranked = select_ranked_candidates(ranking_query)
+    if not ranked["candidates"]:
+        no_match_reason = no_match_reason or "below_min_ranking_threshold"
 
     response = {
         "query": search_query,
@@ -605,20 +655,28 @@ def api_chat():
         "candidates": ranked["candidates"],
         "ranking_debug": ranked["ranking_debug"],
     }
+    if ranked["candidates"]:
+        if intent_config.enabled:
+            response["type"] = "ranked_results"
+    else:
+        response["type"] = "no_match"
+        response["message"] = NO_MATCH_MESSAGE
     if intent_config.debug:
+        response.update(debug_fields(
+            ranking_source=ranked["selection_source"],
+            cohere_attempted=ranked["ranking_debug"].get("cohere_attempted", False),
+            fallback_used=ranked["ranking_debug"].get("fallback_used", False),
+        ))
         response.update({
-            "type": "ranked_results",
-            "original_query": search_query,
             "ranking_query": ranking_query,
             "intent_refinement": {
-                "used": intent_used,
+                "used": intent_attempted,
                 "status": refined_intent.get("status") if refined_intent else None,
                 "confidence": refined_intent.get("confidence") if refined_intent else None,
                 "user_goal": refined_intent.get("user_goal") if refined_intent else None,
                 "normalized_query": refined_intent.get("normalized_query") if refined_intent else None,
                 "ranking_keywords": refined_intent.get("ranking_keywords") if refined_intent else [],
             },
-            "initial_candidates": initial_candidates,
             "final_candidates": ranked["all_candidates"],
         })
 
