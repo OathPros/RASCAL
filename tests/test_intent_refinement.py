@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import app
 from intent_refinement import (
+    _completion_url,
     _extract_completion_text,
     build_ranking_query,
     extract_json_object,
@@ -89,6 +90,35 @@ class IntentRefinementUnitTests(unittest.TestCase):
         self.assertEqual(config.api_key, "institution-code")
         self.assertEqual(config.auth_header, "x-api-key")
         self.assertEqual(config.model, "claude-haiku-4-5")
+
+    @patch.dict(os.environ, {
+        "INTENT_REFINEMENT_ENABLED": "true",
+        "AZURE_FOUNDRY_ENDPOINT": "https://example.services.ai.azure.com",
+        "AZURE_FOUNDRY_API_KEY": "secret",
+        "AZURE_FOUNDRY_MODEL": "deepseek-v3",
+    }, clear=True)
+    def test_azure_foundry_aliases_use_models_chat_completions_url(self):
+        config = get_intent_refinement_config()
+        self.assertEqual(config.provider, "azure-foundry")
+        self.assertEqual(config.auth_header, "api-key")
+        self.assertEqual(
+            _completion_url(config),
+            "https://example.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview",
+        )
+
+    @patch.dict(os.environ, {
+        "INTENT_REFINEMENT_ENABLED": "true",
+        "INTENT_REFINEMENT_PROVIDER": "azure-foundry",
+        "INTENT_REFINEMENT_TARGET_URL": "https://example.services.ai.azure.com/models/chat/completions?api-version=2025-01-01-preview",
+        "INTENT_REFINEMENT_API_KEY": "secret",
+        "INTENT_REFINEMENT_MODEL": "deepseek-v3",
+    }, clear=True)
+    def test_azure_foundry_keeps_full_chat_completions_url(self):
+        config = get_intent_refinement_config()
+        self.assertEqual(
+            _completion_url(config),
+            "https://example.services.ai.azure.com/models/chat/completions?api-version=2025-01-01-preview",
+        )
 
     def test_anthropic_response_text_is_extracted(self):
         text = _extract_completion_text(

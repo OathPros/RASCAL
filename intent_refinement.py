@@ -58,6 +58,7 @@ class IntentRefinementConfig:
     max_turns: int
     min_confidence: float
     debug: bool
+    api_version: str
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -105,9 +106,12 @@ def get_intent_refinement_config() -> IntentRefinementConfig:
         or DEFAULT_MODEL
     ).strip()
     provider = (os.getenv("INTENT_REFINEMENT_PROVIDER") or "").strip().lower()
+    using_azure_aliases = bool(os.getenv("AZURE_FOUNDRY_ENDPOINT") or os.getenv("AZURE_FOUNDRY_API_KEY") or os.getenv("AZURE_FOUNDRY_MODEL"))
     if not provider:
         if "claude" in model.lower() or "anthropic" in target_url.lower():
             provider = "anthropic"
+        elif using_azure_aliases or "services.ai.azure.com" in target_url.lower():
+            provider = "azure-foundry"
         else:
             provider = "openai-compatible"
     auth_header = (os.getenv("INTENT_REFINEMENT_AUTH_HEADER") or "").strip()
@@ -125,6 +129,7 @@ def get_intent_refinement_config() -> IntentRefinementConfig:
         max_turns=max(0, _env_int("INTENT_REFINEMENT_MAX_TURNS", 2)),
         min_confidence=min(1.0, max(0.0, _env_float("INTENT_REFINEMENT_MIN_CONFIDENCE", 0.65))),
         debug=_env_bool("INTENT_REFINEMENT_DEBUG", False),
+        api_version=(os.getenv("INTENT_REFINEMENT_API_VERSION") or os.getenv("AZURE_FOUNDRY_API_VERSION") or "2024-05-01-preview").strip(),
     )
 
 
@@ -293,7 +298,7 @@ def build_user_prompt(user_message: str, top_candidates: list[dict[str, Any]], s
         {"action_id": c.get("action_id"), "title": c.get("title"), "description": c.get("description"), "score": c.get("score")}
         for c in top_candidates[:5]
     ]
-    return f'''Original user message:\n"{user_message}"\n\nTop local ranking candidates:\n{json.dumps(compact_candidates, ensure_ascii=False)}\n\nKnown catalogue service areas:\n{json.dumps(service_areas[:50], ensure_ascii=False)}\n\nPrevious clarification context:\n{json.dumps(intent_state, ensure_ascii=False) if intent_state else "null"}\n\nReturn JSON with:\n- status\n- user_goal\n- normalized_query\n- likely_service_area\n- request_type\n- missing_information\n- clarifying_question\n- confidence\n- ranking_keywords'''
+    return f'''Original user message:\n"{user_message}"\n\nTop local ranking candidates:\n{json.dumps(compact_candidates, ensure_ascii=False)}\n\nKnown catalogue service areas:\n{json.dumps(service_areas[:50], ensure_ascii=False)}\n\nPrevious clarification context:\n{json.dumps(intent_state, ensure_ascii=False) if intent_state else "null"}\n\nReturn JSON with:\n- intent_classification\n- user_goal\n- normalized_query\n- likely_service_area\n- request_type\n- missing_information\n- clarifying_question\n- confidence\n- ranking_keywords'''
 
 
 def _safe_headers(config: IntentRefinementConfig) -> dict[str, str]:
@@ -329,9 +334,23 @@ def _provider_payload(system_prompt: str, user_prompt: str, config: IntentRefine
     }
 
 
+def _append_query_param(url: str, name: str, value: str) -> str:
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}{name}={value}"
+
+
 def _completion_url(config: IntentRefinementConfig) -> str:
     url = config.target_url.rstrip("/")
-    if config.provider == "openai-compatible" and not url.endswith("/chat/completions"):
+    if config.provider == "azure-foundry":
+        base_url = url.split("?", 1)[0]
+        if not base_url.endswith("/chat/completions"):
+            if base_url.endswith("/models"):
+                url = f"{url}/chat/completions"
+            else:
+                url = f"{url}/models/chat/completions"
+        if config.api_version and "api-version=" not in url:
+            url = _append_query_param(url, "api-version", config.api_version)
+    elif config.provider == "openai-compatible" and not url.endswith("/chat/completions"):
         url = f"{url}/chat/completions"
     return url
 
@@ -368,6 +387,9 @@ def intent_llm_chat_completion(system_prompt: str, user_prompt: str, config: Int
     try:
         with request.urlopen(req, timeout=config.timeout_seconds) as response:
             body = json.loads(response.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        LOGGER.warning("Intent refinement LLM call failed safely: HTTPError status=%s reason=%s", exc.code, exc.reason)
+        return None
     except (error.URLError, TimeoutError, socket.timeout, json.JSONDecodeError, OSError) as exc:
         LOGGER.warning("Intent refinement LLM call failed safely: %s", exc.__class__.__name__)
         return None
