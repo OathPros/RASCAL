@@ -19,6 +19,7 @@ from cohere_reranker import cohere_enabled, cohere_rerank_action, cohere_top_k
 from intent_refinement import (
     build_ranking_query,
     get_intent_refinement_config,
+    infer_service_intent_query,
     refine_intent_with_llm,
     heuristic_intent_fallback,
     should_refine_intent,
@@ -541,7 +542,7 @@ def api_chat():
         context_messages = []
     clean_context = [str(message).strip() for message in context_messages if str(message).strip()]
     search_query = " ".join([*clean_context, query]).strip()
-    ranking_query = search_query
+    ranking_query = infer_service_intent_query(search_query)
 
     intent_config = get_intent_refinement_config()
     refined_intent = None
@@ -639,9 +640,9 @@ def api_chat():
             if classification in {"valid_it_service_request", "vague_but_probably_it"}:
                 improved_query = build_ranking_query(refined_intent)
                 if improved_query and refined_intent.get("confidence", 0) >= intent_config.min_confidence:
-                    ranking_query = improved_query
+                    ranking_query = infer_service_intent_query(improved_query)
                 elif improved_query and classification == "vague_but_probably_it":
-                    ranking_query = improved_query
+                    ranking_query = infer_service_intent_query(improved_query)
                 elif not improved_query:
                     LOGGER.warning("Intent refinement produced an empty ranking query; falling back to original ranking")
                 else:
