@@ -11,6 +11,7 @@ from intent_refinement import (
     extract_json_object,
     get_intent_refinement_config,
     heuristic_intent_fallback,
+    infer_service_intent_query,
     should_refine_intent,
     validate_intent_response,
 )
@@ -63,6 +64,16 @@ class IntentRefinementUnitTests(unittest.TestCase):
         parsed = heuristic_intent_fallback("asdfasdfasdf")
         self.assertIsNotNone(parsed)
         self.assertEqual(parsed["intent_classification"], "unsafe_or_unusable")
+
+    def test_service_intent_query_expands_new_hire_teams_request(self):
+        query = infer_service_intent_query("I need Teams for a new hire")
+        self.assertIn("new starter setup", query)
+        self.assertIn("Microsoft 365", query)
+        self.assertIn("access provisioning", query)
+
+    def test_service_intent_query_does_not_force_non_it_match(self):
+        query = infer_service_intent_query("I need a puppy")
+        self.assertEqual(query, "I need a puppy")
 
     def test_ready_to_rank_builds_improved_query(self):
         query = build_ranking_query({

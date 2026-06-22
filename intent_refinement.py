@@ -19,6 +19,21 @@ STATUS_ALIASES = {
 }
 DEFAULT_MODEL = "claude-haiku-4-5"
 
+SERVICE_REQUEST_TYPES = [
+    "service_request",
+    "incident",
+    "knowledge_question",
+    "access_request",
+    "consultation_request",
+    "procurement_request",
+    "account_issue",
+    "software_issue",
+    "hardware_issue",
+    "escalation",
+    "out_of_scope",
+    "unclear",
+]
+
 SYSTEM_PROMPT = """You are the intent clarification layer for RASCAL, a service-catalogue routing system.
 
 Your job is to convert vague, unclear, incorrect, contradictory, or incomplete user requests into a clear service-intent object that can be used by a deterministic ranking engine.
@@ -26,6 +41,17 @@ Your job is to convert vague, unclear, incorrect, contradictory, or incomplete u
 You must not invent services, owners, forms, SLAs, eligibility rules, backend systems, or catalogue entries.
 
 You are not selecting the final service request. You are only clarifying the user's likely goal and producing a better search query.
+
+Prioritize service intent over keyword matching. For every user message, infer:
+- what the user is trying to do;
+- what they are trying to get, fix, access, learn, request, change, remove, report, or escalate;
+- whether the request is a service request, incident, knowledge question, access request, consultation request, procurement request, account issue, software issue, hardware issue, escalation, out of scope, or unclear;
+- which known catalogue service area or catalogue item would most likely fulfill that intent.
+
+Avoid overfitting to exact wording. Translate conversational wording into catalogue-oriented intent only when the message supports it. For example:
+- "I need Teams for a new hire" may involve onboarding, account setup, Microsoft 365 licensing, Teams access, access provisioning, or new-starter support; include these concepts in normalized_query/ranking_keywords instead of relying only on "Teams".
+- "My employee needs access to the thing" is probably an access request but lacks the system/resource name; ask one clarifying question.
+- "I need a puppy" is likely out of scope or unclear, not an IT service match.
 
 Return only valid JSON.
 
@@ -239,6 +265,61 @@ def heuristic_intent_fallback(user_message: str) -> dict[str, Any] | None:
             "ranking_keywords": [],
         }
     return None
+
+
+def infer_service_intent_query(user_message: str) -> str:
+    """Expand conversational requests with service-intent language for ranking.
+
+    This deterministic layer is intentionally conservative. It adds intent and
+    request-type concepts that help catalogue ranking when the optional LLM is
+    disabled or unavailable, but it does not manufacture a catalogue match for
+    obvious non-IT requests.
+    """
+    normalized = " ".join(
+        token.strip(" ?!.,;:")
+        for token in user_message.lower().replace("’", "'").split()
+        if token.strip(" ?!.,;:")
+    )
+    if not normalized:
+        return user_message
+    if heuristic_intent_fallback(normalized):
+        return user_message
+
+    expansions: list[str] = []
+
+    access_terms = ["access", "permission", "permissions", "entitlement", "role", "group", "can't get in", "cant get in", "log in", "login"]
+    if any(term in normalized for term in access_terms):
+        expansions.extend(["access request", "access provisioning", "permissions", "account access"])
+
+    if any(term in normalized for term in ["new hire", "new employee", "new starter", "new joiner", "onboard", "onboarding"]):
+        expansions.extend(["new starter setup", "employee onboarding", "account setup", "baseline access provisioning"])
+
+    if any(term in normalized for term in ["teams", "microsoft teams", "m365", "office 365", "o365", "sharepoint", "onedrive"]):
+        expansions.extend(["Microsoft 365", "collaboration messaging", "license", "software access", "account provisioning"])
+
+    if any(term in normalized for term in ["buy", "purchase", "procure", "order", "quote", "vendor", "license"]):
+        expansions.extend(["procurement request", "software license", "hardware procurement"])
+
+    if any(term in normalized for term in ["broken", "not working", "doesn't work", "doesnt work", "error", "issue", "problem", "outage", "down"]):
+        expansions.extend(["incident", "troubleshooting", "fix issue", "support request"])
+
+    if any(term in normalized for term in ["password", "reset", "locked", "unlock", "can't log", "cant log"]):
+        expansions.extend(["account issue", "credential reset", "login support"])
+
+    if any(term in normalized for term in ["laptop", "desktop", "monitor", "keyboard", "mouse", "printer", "device", "hardware"]):
+        expansions.extend(["hardware issue", "hardware request", "device support"])
+
+    if any(term in normalized for term in ["software", "application", "app", "install", "uninstall", "upgrade"]):
+        expansions.extend(["software issue", "software access", "application support"])
+
+    if any(term in normalized for term in ["how do i", "how to", "where can i", "what is", "learn", "documentation"]):
+        expansions.extend(["knowledge question", "information request", "how-to support"])
+
+    if not expansions:
+        return user_message
+
+    deduped = list(dict.fromkeys(expansions))
+    return " ".join([user_message, *deduped])
 
 
 def validate_intent_response(raw_response: str | dict[str, Any] | None) -> dict[str, Any] | None:
